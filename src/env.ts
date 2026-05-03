@@ -1,0 +1,40 @@
+export interface SyncQueueMessage {
+  stage: "rebuild" | "scrape" | "erp" | "merge" | "push";
+  sku?: string | null;
+  slug?: string | null;
+  url?: string | null;
+  queue_row_id?: number | null;
+  attempt?: number;
+}
+
+export interface Env {
+  DB: D1Database;
+  SYNC_QUEUE: Queue<SyncQueueMessage>;
+  SYNC_DLQ: Queue<SyncQueueMessage>;
+
+  SCRAPE_BASE_URL: string;
+  SCRAPE_SITEMAP_PATH: string;
+  SCRAPE_USER_AGENT?: string;
+
+  ERP_BASE_URL: string;
+  ERP_API_TOKEN?: string;
+
+  WOO_BASE_URL: string;
+  WOO_CONSUMER_KEY?: string;
+  WOO_CONSUMER_SECRET?: string;
+
+  WORKER_API_KEY?: string;
+
+  REBUILD_INTERVAL_HOURS?: string;
+  DRAIN_BATCH_SIZE?: string;
+  REQUEST_TIMEOUT_MS?: string;
+  LOG_LEVEL?: string;
+}
+
+export type AppEnv = {
+  Bindings: Env;
+  Variables: {
+    requestId: string;
+    requestStart: number;
+  };
+};

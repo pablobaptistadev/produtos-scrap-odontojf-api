@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "produtos-scrap-odontojf-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-02-21",
+  "workers_dev": true,
+  "account_id": "9a9f4e5b0f7015bab8ca874ecd887339",
+  "routes": [
+    {
+      "pattern": "odontoapi.wpatomic.com.br",
+      "custom_domain": true
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "odontojf-products-db",
+      "database_id": "48a12199-a327-40da-9def-1f1f993cf00b"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SYNC_QUEUE",
+        "queue": "odontojf-sync-queue"
+      },
+      {
+        "binding": "SYNC_DLQ",
+        "queue": "odontojf-sync-dlq"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "odontojf-sync-queue",
+        "max_batch_size": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "odontojf-sync-dlq",
+        "max_batch_timeout": 10,
+        "max_concurrency": 2
+      }
+    ]
+  },
+  "vars": {
+    "SCRAPE_BASE_URL": "https://dentalodontocirurgicajf.com.br",
+    "SCRAPE_SITEMAP_PATH": "/api/sitemap/products",
+    "SCRAPE_USER_AGENT": "Mozilla/5.0 (compatible; OdontoJfSync/1.0; +https://odontoapi.wpatomic.com.br)",
+    "ERP_BASE_URL": "http://45.227.82.180:8082/ecommerceapi/v1",
+    "WOO_BASE_URL": "https://odonto.wpatomic.com.br",
+    "REBUILD_INTERVAL_HOURS": "24",
+    "DRAIN_BATCH_SIZE": "20",
+    "REQUEST_TIMEOUT_MS": "15000",
+    "LOG_LEVEL": "INFO"
+  },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "observability": {
+    "enabled": true
+  }
+}
