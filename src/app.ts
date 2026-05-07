@@ -9,6 +9,7 @@ import { registerSyncRoutes } from "./routes/sync";
 import { registerProductRoutes } from "./routes/products";
 import { registerQueueRoutes } from "./routes/queue";
 import { registerMonitorRoutes } from "./routes/monitor";
+import { registerDebugRoutes } from "./routes/debug";
 
 export const app = new Hono<AppEnv>();
 
@@ -30,5 +31,6 @@ registerSyncRoutes(app);
 registerProductRoutes(app);
 registerQueueRoutes(app);
 registerMonitorRoutes(app);
+registerDebugRoutes(app);
 
 app.notFound(() => jsonResponse({ error: "not found" }, 404));
