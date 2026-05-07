@@ -22,6 +22,8 @@ describe("mergeScrapeAndErp", () => {
     raw_meta: {},
     detected_sku: null,
     barcode: null,
+    provider_code: null,
+    dimensions: { weight: null, length: null, width: null, height: null },
     price: null,
     price_text: null,
     installments: null,

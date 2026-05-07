@@ -24,9 +24,16 @@ export interface MergedVariation {
   /** human-readable code (Código do produto). Null until enriched by the
    *  product-specific-data API call. */
   sku: string | null;
+  /** manufacturer / supplier reference */
+  provider_code: string | null;
+  barcode: string | null;
   regular_price: string | null;
   stock_quantity: number | null;
   stock_status: "instock" | "outofstock" | null;
+  /** weight in kg (Woo native field) */
+  weight: string | null;
+  /** Woo-shaped object: { length, width, height } in cm, all strings */
+  dimensions: { length: string; width: string; height: string };
 }
 
 export interface MergedProduct {
@@ -42,6 +49,14 @@ export interface MergedProduct {
   regular_price: string | null;
   stock_quantity: number | null;
   stock_status: "instock" | "outofstock" | null;
+  /** Woo native: weight in kg as a string (e.g. "0.25") */
+  weight: string | null;
+  /** Woo native: { length, width, height } in cm, all strings */
+  dimensions: { length: string; width: string; height: string };
+  /** EAN / GTIN of the parent product */
+  barcode: string | null;
+  /** manufacturer / supplier reference */
+  provider_code: string | null;
   meta: Array<{ key: string; value: string }>;
   variations: MergedVariation[];
   video_urls: string[];
@@ -172,6 +187,8 @@ export function mergeScrapeAndErp(input: {
   const variations: MergedVariation[] = (scrape?.variations ?? []).map((v) => ({
     name: v.name,
     sku: v.sku,
+    provider_code: v.provider_code ?? null,
+    barcode: v.barcode ?? null,
     regular_price: v.price,
     stock_quantity: v.stock_qty,
     stock_status:
@@ -180,7 +197,37 @@ export function mergeScrapeAndErp(input: {
         : v.stock_status === "in_stock"
         ? "instock"
         : null,
+    weight: dimToStr(v.dimensions?.weight),
+    dimensions: {
+      length: dimToStr(v.dimensions?.length) ?? "",
+      width: dimToStr(v.dimensions?.width) ?? "",
+      height: dimToStr(v.dimensions?.height) ?? "",
+    },
   }));
+
+  // Parent shipping fields. Prefer ERP, fall back to scraped parent dimensions.
+  const erpWeight = asNumber(pickFromErp(erp, ["peso", "Peso", "weight", "peso_kg"]));
+  const erpLength = asNumber(pickFromErp(erp, ["comprimento", "length", "Comprimento", "comprimento_cm"]));
+  const erpWidth = asNumber(pickFromErp(erp, ["largura", "width", "Largura", "largura_cm"]));
+  const erpHeight = asNumber(pickFromErp(erp, ["altura", "height", "Altura", "altura_cm"]));
+
+  const parentDims = scrape?.dimensions ?? { weight: null, length: null, width: null, height: null };
+  const weight = dimToStr(erpWeight ?? parentDims.weight);
+  const dimensions = {
+    length: dimToStr(erpLength ?? parentDims.length) ?? "",
+    width: dimToStr(erpWidth ?? parentDims.width) ?? "",
+    height: dimToStr(erpHeight ?? parentDims.height) ?? "",
+  };
+
+  // ERP barcode/EAN — falls back to the scraped parent barcode.
+  const erpBarcode = asString(pickFromErp(erp, ["codigo_barras", "ean", "gtin", "codigoBarras", "barcode"]));
+  const barcode = erpBarcode ?? scrape?.barcode ?? null;
+  // ERP supplier/manufacturer code — falls back to the scraped parent providerCode.
+  const erpProvider = asString(pickFromErp(erp, ["codigo_fornecedor", "providerCode", "provider_code", "codigo_fabricante"]));
+  const provider_code = erpProvider ?? scrape?.provider_code ?? null;
+
+  if (barcode) meta.push({ key: "_odontojf_barcode", value: barcode });
+  if (provider_code) meta.push({ key: "_odontojf_provider_code", value: provider_code });
 
   return {
     sku,
@@ -195,6 +242,10 @@ export function mergeScrapeAndErp(input: {
     regular_price: regularPrice,
     stock_quantity: stockQuantity,
     stock_status: stockStatus,
+    weight,
+    dimensions,
+    barcode,
+    provider_code,
     meta,
     variations,
     video_urls: scrape?.video_urls ?? [],
@@ -202,6 +253,12 @@ export function mergeScrapeAndErp(input: {
     extra: { scrape: scrape ?? null, erp: erp ?? null },
     source_url: scrape?.url ?? null,
   };
+}
+
+function dimToStr(value: number | null | undefined): string | null {
+  if (value == null) return null;
+  // strip insignificant trailing zeros — Woo accepts strings.
+  return String(value);
 }
 
 function minPriceFromVariations(variations: ScrapeVariation[]): string | null {

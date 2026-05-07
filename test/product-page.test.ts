@@ -89,6 +89,15 @@ describe("parseProductHtml — simple product (Dispensador Pistola Universal)", 
     expect(result.stock_qty).toBeNull();
     expect(result.api_enriched).toBe(false);
   });
+
+  it("extracts shipping dimensions and provider_code from initialData", () => {
+    expect(result.dimensions.weight).toBe(0.25);
+    expect(result.dimensions.length).toBe(20);
+    expect(result.dimensions.width).toBe(6);
+    expect(result.dimensions.height).toBe(10);
+    // Dispensador's parent providerCode is empty, so we expect null (not "")
+    expect(result.provider_code).toBeNull();
+  });
 });
 
 describe("parseProductHtml — variable product (Resina Elora APS - 4g)", () => {
@@ -106,11 +115,17 @@ describe("parseProductHtml — variable product (Resina Elora APS - 4g)", () => 
     expect(result.title).toBe("Resina Elora APS - 4g");
   });
 
-  it("populates each variation with id and label, leaving sku/price for the API", () => {
+  it("populates each variation with id, label, barcode, providerCode, dimensions; leaving sku/price for the API", () => {
     const a1 = result.variations.find((v) => v.name === "A1");
     expect(a1).toBeDefined();
     expect(a1!.id).toBe("AqP97k2YWhqEoAn9J419");
     expect(a1!.barcode).toBe("7899633834921");
+    expect(a1!.provider_code).toBe("4000056236");
+    // dimensions inherit from parent when variation overrides match it
+    expect(a1!.dimensions.weight).toBe(0.05);
+    expect(a1!.dimensions.length).toBe(10);
+    expect(a1!.dimensions.width).toBe(5);
+    expect(a1!.dimensions.height).toBe(3);
     // sku and price come from /api/product-specific-data; parser leaves them null
     expect(a1!.sku).toBeNull();
     expect(a1!.price).toBeNull();

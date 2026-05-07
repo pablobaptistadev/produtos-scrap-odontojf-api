@@ -28,18 +28,33 @@ export interface ScrapeImage {
   alt: string | null;
 }
 
+export interface ScrapeDimensions {
+  /** kg */
+  weight: number | null;
+  /** cm */
+  length: number | null;
+  /** cm */
+  width: number | null;
+  /** cm */
+  height: number | null;
+}
+
 export interface ScrapeVariation {
   /** internal site id used by the specific-data API */
   id: string;
-  /** human-readable code returned by /api/product-specific-data */
+  /** human-readable code returned by /api/product-specific-data (Código do produto) */
   sku: string | null;
   /** label shown in the variation table (e.g. "A1", "DB-A3,5") */
   name: string;
+  /** manufacturer / supplier reference (initialData.options[i].providerCode) */
+  provider_code: string | null;
   price: string | null;
   price_text: string | null;
   stock_status: "in_stock" | "out_of_stock" | null;
   stock_qty: number | null;
   barcode: string | null;
+  /** per-variation shipping dimensions (falls back to the parent's values) */
+  dimensions: ScrapeDimensions;
 }
 
 export interface ScrapePdf {
@@ -68,6 +83,10 @@ export interface ScrapeResult {
   /** human-readable product code (Código do produto). Comes from API. */
   detected_sku: string | null;
   barcode: string | null;
+  /** manufacturer / supplier reference (initialData.providerCode) */
+  provider_code: string | null;
+  /** parent shipping dimensions (kg / cm). Variations may override. */
+  dimensions: ScrapeDimensions;
   /** simple-product fields (null on variable products) */
   price: string | null;
   price_text: string | null;
@@ -123,6 +142,11 @@ interface NextDataInitial {
   description?: string;
   descriptionFormatted?: string;
   barcode?: string;
+  providerCode?: string;
+  weight?: number | null;
+  length?: number | null;
+  width?: number | null;
+  height?: number | null;
   youtubeVideoId?: string;
   images?: Array<Record<string, string>>;
   files?: Array<{ name?: string; url?: string; category?: string; otherCategory?: string; extension?: string }>;
@@ -139,6 +163,11 @@ interface NextDataOption {
   brand?: string;
   slug?: string;
   barcode?: string;
+  providerCode?: string;
+  weight?: number | null;
+  length?: number | null;
+  width?: number | null;
+  height?: number | null;
   images?: Array<Record<string, string>>;
   files?: Array<{ name?: string; url?: string; category?: string; extension?: string }>;
   youtubeVideoId?: string;
@@ -295,17 +324,22 @@ function parseFromNextData(
   // Videos: youtubeVideoId field + iframes embedded in description
   const video_urls = collectVideoUrls(initial.youtubeVideoId, description_html);
 
+  // Parent dimensions (used as fallback for variations that don't override).
+  const parentDimensions = readDimensions(initial);
+
   // Variations
   const variations: ScrapeVariation[] = isVariable
     ? (initial.options ?? []).map((opt) => ({
         id: opt.id,
         sku: null,
         name: decodeHtmlEntities(opt.titleInFamily ?? opt.title ?? "").trim(),
+        provider_code: nonEmpty(opt.providerCode) ?? null,
         price: null,
         price_text: null,
         stock_status: null,
         stock_qty: null,
-        barcode: opt.barcode ?? null,
+        barcode: nonEmpty(opt.barcode) ?? null,
+        dimensions: mergeDimensions(parentDimensions, readDimensions(opt)),
       }))
     : [];
 
@@ -328,7 +362,9 @@ function parseFromNextData(
     stock_status: null, // populated by enrichWithSpecificData
     raw_meta: meta,
     detected_sku: null, // populated by enrichWithSpecificData
-    barcode: initial.barcode ?? null,
+    barcode: nonEmpty(initial.barcode) ?? null,
+    provider_code: nonEmpty(initial.providerCode) ?? null,
+    dimensions: parentDimensions,
     price: null,
     price_text: null,
     installments: null,
@@ -374,6 +410,8 @@ function parseFromRenderedDom(
     raw_meta: meta,
     detected_sku: null,
     barcode: null,
+    provider_code: null,
+    dimensions: { weight: null, length: null, width: null, height: null },
     price: null,
     price_text: null,
     installments: null,
@@ -585,4 +623,35 @@ function htmlToText(html: string): string {
   return decodeHtmlEntities(html.replace(/<[^>]+>/g, " "))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function nonEmpty(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function num(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function readDimensions(src: { weight?: number | null; length?: number | null; width?: number | null; height?: number | null }): ScrapeDimensions {
+  return {
+    weight: num(src.weight),
+    length: num(src.length),
+    width: num(src.width),
+    height: num(src.height),
+  };
+}
+
+/** Take field-by-field overrides from variation; fall back to parent for any null. */
+function mergeDimensions(parent: ScrapeDimensions, child: ScrapeDimensions): ScrapeDimensions {
+  return {
+    weight: child.weight ?? parent.weight,
+    length: child.length ?? parent.length,
+    width: child.width ?? parent.width,
+    height: child.height ?? parent.height,
+  };
 }
