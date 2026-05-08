@@ -388,6 +388,29 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
     if (!merged && product.scrape && product.scrape.data) {
       const s = product.scrape.data;
       const dims = s.dimensions || {};
+      const isVar = s.type === 'variable' && Array.isArray(s.variations) && s.variations.length > 0;
+
+      // Aggregate parent price/stock from variations (mirrors the real merge.ts logic).
+      let parentPrice = s.price || null;
+      let parentStockQty = s.stock_qty != null ? s.stock_qty : null;
+      let parentStockStatus = s.stock_status === 'in_stock' ? 'instock' : s.stock_status === 'out_of_stock' ? 'outofstock' : null;
+      if (isVar) {
+        let min = null;
+        let total = 0;
+        let anyInStock = false;
+        for (const v of s.variations) {
+          if (v.price && v.stock_status !== 'out_of_stock') {
+            const n = Number(v.price);
+            if (Number.isFinite(n) && (min == null || n < min)) min = n;
+          }
+          if (v.stock_status !== 'out_of_stock' && v.stock_qty != null) total += v.stock_qty;
+          if (v.stock_status === 'in_stock' || (v.stock_qty || 0) > 0) anyInStock = true;
+        }
+        if (parentPrice == null && min != null) parentPrice = min.toFixed(2);
+        if (parentStockQty == null) parentStockQty = total || null;
+        if (parentStockStatus == null) parentStockStatus = anyInStock ? 'instock' : 'outofstock';
+      }
+
       merged = {
         sku: s.detected_sku || product.sku,
         type: s.type || 'simple',
@@ -399,10 +422,10 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
         brand: s.brand || null,
         categories: (s.category || []).map(name => ({ name })),
         images: (s.images || []).map(img => ({ src: img.src || img })),
-        regular_price: s.price || null,
+        regular_price: parentPrice,
         sale_price: null,
-        stock_quantity: s.stock_qty != null ? s.stock_qty : null,
-        stock_status: s.stock_status === 'in_stock' ? 'instock' : s.stock_status === 'out_of_stock' ? 'outofstock' : null,
+        stock_quantity: parentStockQty,
+        stock_status: parentStockStatus,
         weight: dims.weight != null ? String(dims.weight) : null,
         dimensions: {
           length: dims.length != null ? String(dims.length) : '',
