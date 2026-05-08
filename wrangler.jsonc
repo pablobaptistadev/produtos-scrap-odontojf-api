@@ -18,12 +18,11 @@
       "database_id": "48a12199-a327-40da-9def-1f1f993cf00b"
     }
   ],
-  "r2_buckets": [
-    {
-      "binding": "MEDIA",
-      "bucket_name": "odontojf-products-media"
-    }
-  ],
+  // R2 binding will be added back when the bucket exists. The media stage
+  // already handles `env.MEDIA == null` by no-op'ing with a warning.
+  // "r2_buckets": [
+  //   { "binding": "MEDIA", "bucket_name": "odontojf-products-media" }
+  // ],
   "queues": {
     "producers": [
       {

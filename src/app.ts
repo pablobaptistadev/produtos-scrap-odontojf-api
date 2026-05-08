@@ -10,6 +10,8 @@ import { registerProductRoutes } from "./routes/products";
 import { registerQueueRoutes } from "./routes/queue";
 import { registerMonitorRoutes } from "./routes/monitor";
 import { registerDebugRoutes } from "./routes/debug";
+import { registerDashboardRoutes } from "./routes/dashboard";
+import { registerDashboardApiRoutes } from "./routes/dashboard-api";
 
 export const app = new Hono<AppEnv>();
 
@@ -32,5 +34,7 @@ registerProductRoutes(app);
 registerQueueRoutes(app);
 registerMonitorRoutes(app);
 registerDebugRoutes(app);
+registerDashboardRoutes(app);
+registerDashboardApiRoutes(app);
 
 app.notFound(() => jsonResponse({ error: "not found" }, 404));

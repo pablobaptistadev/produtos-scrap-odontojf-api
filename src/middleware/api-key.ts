@@ -18,7 +18,7 @@ export const apiKeyMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     c.header("x-warning", "WORKER_API_KEY not configured; auth disabled");
     return next();
   }
-  const provided = c.req.header("x-api-key") ?? c.req.query("api_key") ?? extractBearer(c.req.header("authorization"));
+  const provided = c.req.header("x-api-key") ?? c.req.query("api_key") ?? c.req.query("key") ?? extractBearer(c.req.header("authorization"));
   if (!provided || !timingSafeEqual(provided, expected)) {
     throw new ApiError(401, "invalid or missing api key");
   }
