@@ -223,6 +223,96 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
     });
   });
 
+  /**
+   * GET /admin/audit-external
+   *   Walks every product with scrape_status='ok' and extracts every URL
+   *   referenced inside scrape_json (images, variations, description_html,
+   *   description_images, pdf_urls, raw_meta, video_urls). For each URL
+   *   classifies it:
+   *     - "ours" — already on R2 (media.odontoapi or pub-*.r2.dev)
+   *     - "allowed" — storefront product page (source_url) or YouTube embed
+   *     - "external" — anything else (CDN/manufacturer host we don't control)
+   *
+   *   Returns: counts per category, distinct external hosts (with sample
+   *   URLs and SKU counts), and the SKU list per host so we can see exactly
+   *   which products need a re-mirror.
+   *
+   *   Read-only — does not modify any row.
+   */
+  app.get("/admin/audit-external", async (c) => {
+    const limit = Math.max(0, Number.parseInt(c.req.query("limit") ?? "0", 10));
+    const sql =
+      `SELECT sku, scrape_json FROM products WHERE scrape_status='ok' AND scrape_json IS NOT NULL`
+      + (limit > 0 ? ` LIMIT ${limit}` : "");
+    const rows = await c.env.DB.prepare(sql).all<{ sku: string; scrape_json: string }>();
+
+    const URL_RE = /https?:\/\/[^\s"'<>)\\]+/gi;
+    const OUR_HOSTS = ["media.odontoapi.wpatomic.com.br", ".r2.dev", ".r2.cloudflarestorage.com"];
+    const ALLOWED_HOSTS = [
+      "dentalodontocirurgicajf.com.br",
+      "youtube.com",
+      "youtu.be",
+      "ytimg.com",
+      "vimeo.com",
+      "player.vimeo.com",
+    ];
+
+    let totalProducts = 0;
+    let productsWithExternal = 0;
+    let totalUrls = 0;
+    let oursUrls = 0;
+    let allowedUrls = 0;
+    let externalUrls = 0;
+    const hostStats: Record<string, { count: number; sample: string; skus: Set<string> }> = {};
+    const externalSkus = new Set<string>();
+
+    for (const row of rows.results ?? []) {
+      totalProducts++;
+      const text = row.scrape_json;
+      const matches = text.match(URL_RE) ?? [];
+      let hadExternal = false;
+      for (const raw of matches) {
+        // Strip trailing punctuation that often slips into the regex.
+        const u = raw.replace(/[.,;:!?]+$/, "").replace(/\\\//g, "/");
+        totalUrls++;
+        let host = "";
+        try { host = new URL(u).hostname; } catch { continue; }
+        const isOurs = OUR_HOSTS.some((h) => host === h || host.endsWith(h));
+        const isAllowed = ALLOWED_HOSTS.some((h) => host === h || host.endsWith(h));
+        if (isOurs) { oursUrls++; continue; }
+        if (isAllowed) { allowedUrls++; continue; }
+        externalUrls++;
+        hadExternal = true;
+        if (!hostStats[host]) hostStats[host] = { count: 0, sample: u, skus: new Set() };
+        hostStats[host].count++;
+        hostStats[host].skus.add(row.sku);
+      }
+      if (hadExternal) {
+        productsWithExternal++;
+        externalSkus.add(row.sku);
+      }
+    }
+
+    const hostsSorted = Object.entries(hostStats)
+      .map(([host, s]) => ({ host, urls: s.count, distinct_skus: s.skus.size, sample_url: s.sample.slice(0, 200), sample_skus: [...s.skus].slice(0, 5) }))
+      .sort((a, b) => b.urls - a.urls);
+
+    return c.json({
+      summary: {
+        total_products_audited: totalProducts,
+        products_with_external_urls: productsWithExternal,
+        products_clean: totalProducts - productsWithExternal,
+        total_urls: totalUrls,
+        urls_on_r2: oursUrls,
+        urls_allowed: allowedUrls,
+        urls_external: externalUrls,
+        external_distinct_hosts: hostsSorted.length,
+      },
+      external_hosts: hostsSorted,
+      stuck_skus: [...externalSkus],
+    });
+  });
+
   /** Diagnostic: show scrape_json before+after a mirror for a single SKU. */
   app.get("/admin/debug-mirror", async (c) => {
     const sku = c.req.query("sku");

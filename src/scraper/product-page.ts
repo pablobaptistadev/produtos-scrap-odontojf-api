@@ -598,11 +598,15 @@ function collectVideoUrls(youtubeVideoId: string | undefined, descriptionHtml: s
     set.add(`https://www.youtube.com/watch?v=${youtubeVideoId}`);
   }
   if (descriptionHtml) {
+    // YouTube — normalise embed/watch/short forms to watch URL.
     const ytRe = /https?:\/\/(?:www\.)?(?:youtube\.com\/(?:embed\/|watch\?v=)|youtu\.be\/)([\w-]+)/gi;
     for (const m of descriptionHtml.matchAll(ytRe)) {
-      const id = m[1];
-      // normalise to watch URL
-      set.add(`https://www.youtube.com/watch?v=${id}`);
+      set.add(`https://www.youtube.com/watch?v=${m[1]}`);
+    }
+    // Vimeo — accept both vimeo.com/<id> and player.vimeo.com/video/<id> forms.
+    const vimeoRe = /https?:\/\/(?:player\.)?vimeo\.com\/(?:video\/)?([0-9]+)/gi;
+    for (const m of descriptionHtml.matchAll(vimeoRe)) {
+      set.add(`https://vimeo.com/${m[1]}`);
     }
   }
   return Array.from(set);

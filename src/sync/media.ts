@@ -233,6 +233,79 @@ function escapeForRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Hosts whose URLs are accepted as-is (not file references we control). */
+const PERMITTED_HOSTS = [
+  "media.odontoapi.wpatomic.com.br",
+  ".r2.dev",
+  ".r2.cloudflarestorage.com",
+  "dentalodontocirurgicajf.com.br",
+  "youtube.com",
+  "youtu.be",
+  "ytimg.com",
+  "player.vimeo.com",
+  "vimeo.com",
+];
+
+function isPermittedHost(host: string): boolean {
+  return PERMITTED_HOSTS.some((h) => host === h || host.endsWith(h));
+}
+
+/**
+ * Find every URL that points at a downloadable asset (image or PDF) hosted on
+ * a non-permitted domain. Looks at <img src="…">, every URL inside an <img
+ * srcset="…">, and <a href="…pdf"> anchors.
+ */
+function collectExternalDescriptionUrls(html: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string | null | undefined) => {
+    if (!raw) return;
+    const u = raw.trim().replace(/^["']|["']$/g, "");
+    if (!/^https?:\/\//i.test(u)) return;
+    if (seen.has(u)) return;
+    let host = "";
+    try { host = new URL(u).hostname; } catch { return; }
+    if (isPermittedHost(host)) return;
+    seen.add(u);
+    out.push(u);
+  };
+
+  // <img src="…">
+  for (const m of html.matchAll(/<img\b[^>]*\ssrc="([^"]+)"/gi)) push(m[1]);
+  // <img srcset="url1 1w, url2 2w, …"> — split by commas and drop the size token
+  for (const m of html.matchAll(/<img\b[^>]*\ssrcset="([^"]+)"/gi)) {
+    for (const part of m[1].split(",")) {
+      const url = part.trim().split(/\s+/)[0];
+      push(url);
+    }
+  }
+  // <a href="…pdf">
+  for (const m of html.matchAll(/<a\b[^>]*href="([^"]+\.pdf(?:\?[^"]*)?)"/gi)) push(m[1]);
+
+  return out;
+}
+
+/**
+ * Cleanup wrappers Gmail leaves behind when description text is copy-pasted
+ * from email. We do TWO passes:
+ *   1. Replace href="https://www.google.com/url?q=REAL&…" with href="REAL".
+ *   2. Drop data-saferedirecturl="https://www.google.com/url?q=…" attributes
+ *      entirely — they're informational only and keep an external URL alive
+ *      in the persisted scrape_json.
+ */
+function unwrapGoogleSaferedirect(html: string): string {
+  // Pass 1: rewrite the actual href.
+  let out = html.replace(
+    /href="https?:\/\/(?:www\.)?google\.com\/url\?[^"]*?q=([^&"]+)[^"]*"/gi,
+    (_m, encoded) => {
+      try { return `href="${decodeURIComponent(encoded)}"`; } catch { return `href=""`; }
+    },
+  );
+  // Pass 2: strip the bookkeeping attribute the Gmail editor adds.
+  out = out.replace(/\s+data-saferedirecturl="[^"]*"/gi, "");
+  return out;
+}
+
 /**
  * Mirror every external URL referenced inside a ScrapeResult to R2 and rewrite
  * the URLs in place. Called from runScrapeStage so the scrape_json that lands
@@ -380,9 +453,35 @@ export async function mirrorScrapedMedia(
   }
   scrape.pdf_urls = newPdfs;
 
+  // ---- harvest external file references inside description_html ----
+  // The description sometimes embeds manufacturer images (yller.com.br,
+  // fgmdentalgroup.com, …) inside <img src="…"> / <img srcset="…300w, …1024w">
+  // and PDFs via <a href="…pdf">. Anything that isn't already on R2 or on a
+  // permitted host (storefront / YouTube / Vimeo) gets pulled to R2 here so
+  // the persisted description holds zero external file URLs.
+  if (scrape.description_html) {
+    const descUrls = collectExternalDescriptionUrls(scrape.description_html);
+    let extraIdx = 0;
+    for (const u of descUrls) {
+      // Skip if already in our replacements queue (matches a prior mirror).
+      if (replacements.some((r) => r.from === u)) continue;
+      const key = `products/${safeSku}/scrape/description-extra/${extraIdx++}-${filenameFromUrl(u)}`;
+      const r = await mirrorOne(u, key);
+      if (r.status === "ok" && r.next) {
+        if (r.next !== u) replacements.push({ from: u, to: r.next });
+      } else if (r.status === "drop") {
+        droppedUrls.push(u);
+      }
+      // transient: leave the URL in place — caller will fail the scrape
+    }
+  }
+
   // ---- rewrite description_html ----
   if (scrape.description_html) {
     let html = scrape.description_html;
+    // Step 1: resolve google.com/url?q=… saferedirect wrappers added by Gmail
+    // copy-paste. Replace href with the real q= destination.
+    html = unwrapGoogleSaferedirect(html);
     for (const r of replacements) {
       // Replace exact and HTML-encoded variants of the URL.
       html = html.split(r.from).join(r.to);
@@ -403,7 +502,37 @@ export async function mirrorScrapedMedia(
     // Strip <img src="blob:..."> — these are browser runtime references the
     // admin tool left behind (never resolvable outside the original session).
     html = html.replace(/<img\b[^>]*\ssrc="blob:[^"]*"[^>]*\/?>/gi, "");
+    // Strip 'chrome-extension://…' text leaked from a Chrome PDF-viewer
+    // extension during copy-paste.
+    html = html.replace(/chrome-extension:\/\/[^\s<"]+/gi, "");
+    // Drop <form action="external"> — these are leftover cart forms from
+    // manufacturer storefronts pasted into the description. Useless to us.
+    html = html.replace(/<form\b[^>]*>[\s\S]*?<\/form>/gi, "");
+    // Rewrite anchors that still point at non-permitted hosts to href="#"
+    // — preserves the visible text but removes the external link.
+    html = html.replace(/<a\b([^>]*)\shref="(https?:\/\/[^"]+)"([^>]*)>/gi, (full, pre, url, post) => {
+      let host = "";
+      try { host = new URL(url).hostname; } catch { return full; }
+      if (isPermittedHost(host)) return full;
+      return `<a${pre} href="#"${post}>`;
+    });
+    // Strip any orphan http(s) URL that survived in plain text (e.g. paragraph
+    // body that pasted a manufacturer link). Keep youtube/vimeo/storefront/R2.
+    html = html.replace(/https?:\/\/[^\s<"]+/gi, (url) => {
+      let host = "";
+      try { host = new URL(url).hostname; } catch { return url; }
+      return isPermittedHost(host) ? url : "";
+    });
     scrape.description_html = html;
+
+    // Re-derive plain-text description from the cleaned HTML so it doesn't
+    // hold stale URLs from before the strip passes.
+    scrape.description = html
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim() || null;
   }
 
   // ---- rewrite raw_meta string values ----
@@ -427,9 +556,19 @@ export async function mirrorScrapedMedia(
           break;
         }
       }
-      // Defensive: any stubborn storefront-CDN URL gets blanked.
-      if (/storage\.googleapis\.com\/catalogo-mais-odonto/i.test(next)) {
-        next = "";
+      // Defensive: any URL on a non-permitted host gets blanked. raw_meta is
+      // pure reference metadata — losing a tag is preferable to leaking an
+      // external URL. We rerun the URL extractor and check each one.
+      if (/https?:\/\//i.test(next)) {
+        const urls = next.match(/https?:\/\/[^\s"'<>)]+/gi) ?? [];
+        for (const u of urls) {
+          let host = "";
+          try { host = new URL(u).hostname; } catch { continue; }
+          if (!isPermittedHost(host)) {
+            next = "";
+            break;
+          }
+        }
       }
       scrape.raw_meta[k] = next;
     }
