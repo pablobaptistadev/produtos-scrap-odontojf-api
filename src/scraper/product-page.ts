@@ -321,8 +321,13 @@ function parseFromNextData(
 
   const images = mapImages(initial.images ?? []);
 
-  // PDFs from init.files (parent only — variations rarely override)
-  const pdf_urls = collectPdfFiles(initial.files);
+  // PDFs from init.files (parent only — variations rarely override) + any
+  // PDF links embedded inside the description HTML (e.g. "Link para PDF
+  // Catálogo" anchors that aren't surfaced through initialData.files).
+  const pdf_urls = mergePdfLists(
+    collectPdfFiles(initial.files),
+    collectPdfsFromHtml(description_html ?? ""),
+  );
 
   // Videos: youtubeVideoId field + iframes embedded in description
   const video_urls = collectVideoUrls(initial.youtubeVideoId, description_html);
@@ -554,6 +559,37 @@ function prettifyFileLabel(raw: string): string {
   if (!raw) return "PDF";
   if (raw.length <= 1) return raw.toUpperCase();
   return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+const PDF_ANCHOR_RE = /<a\b[^>]*href="([^"]+\.pdf(?:\?[^"]*)?)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+/** Find PDF links inside arbitrary HTML (descriptions, info panels, etc.). */
+function collectPdfsFromHtml(html: string): ScrapePdf[] {
+  if (!html) return [];
+  const out: ScrapePdf[] = [];
+  const seen = new Set<string>();
+  for (const m of html.matchAll(PDF_ANCHOR_RE)) {
+    const url = m[1];
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const label = htmlToText(m[2]) || "PDF";
+    out.push({ label: label.length > 80 ? label.slice(0, 80) + "…" : label, url });
+  }
+  return out;
+}
+
+/** Merge two PDF lists deduping by URL (first occurrence wins). */
+function mergePdfLists(...lists: ScrapePdf[][]): ScrapePdf[] {
+  const out: ScrapePdf[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const pdf of list) {
+      if (!pdf?.url || seen.has(pdf.url)) continue;
+      seen.add(pdf.url);
+      out.push(pdf);
+    }
+  }
+  return out;
 }
 
 function collectVideoUrls(youtubeVideoId: string | undefined, descriptionHtml: string | null): string[] {
