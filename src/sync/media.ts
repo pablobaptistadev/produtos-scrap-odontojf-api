@@ -384,5 +384,34 @@ export async function mirrorScrapedMedia(
     scrape.description_html = html;
   }
 
+  // ---- rewrite raw_meta string values ----
+  // The scraper preserves OG / Twitter tags under raw_meta for reference. Any
+  // URL there that we already mirrored should swap to the R2 copy; URLs we
+  // dropped (4xx) should be cleared. As a last resort, any storefront-CDN URL
+  // that didn't appear in our mirror plan (e.g. og:image points at a 800x800
+  // version we never extracted) gets blanked — better to lose a meta tag than
+  // to leave an external URL embedded in the persisted scrape.
+  if (scrape.raw_meta && typeof scrape.raw_meta === "object") {
+    for (const k of Object.keys(scrape.raw_meta)) {
+      const v = scrape.raw_meta[k];
+      if (typeof v !== "string") continue;
+      let next = v;
+      for (const r of replacements) {
+        if (next.includes(r.from)) next = next.split(r.from).join(r.to);
+      }
+      for (const dead of droppedUrls) {
+        if (next === dead || next.includes(dead)) {
+          next = "";
+          break;
+        }
+      }
+      // Defensive: any stubborn storefront-CDN URL gets blanked.
+      if (/storage\.googleapis\.com\/catalogo-mais-odonto/i.test(next)) {
+        next = "";
+      }
+      scrape.raw_meta[k] = next;
+    }
+  }
+
   return { scrape, result };
 }
