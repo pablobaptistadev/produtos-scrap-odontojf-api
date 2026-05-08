@@ -55,6 +55,9 @@ export interface ScrapeVariation {
   barcode: string | null;
   /** per-variation shipping dimensions (falls back to the parent's values) */
   dimensions: ScrapeDimensions;
+  /** images attached to this specific variation (largest size each).
+   *  Empty array means "fall back to the parent images" downstream. */
+  images: ScrapeImage[];
 }
 
 export interface ScrapePdf {
@@ -169,7 +172,7 @@ interface NextDataOption {
   width?: number | null;
   height?: number | null;
   images?: Array<Record<string, string>>;
-  files?: Array<{ name?: string; url?: string; category?: string; extension?: string }>;
+  files?: Array<{ name?: string; url?: string; category?: string; otherCategory?: string; extension?: string }>;
   youtubeVideoId?: string;
 }
 
@@ -340,6 +343,7 @@ function parseFromNextData(
         stock_qty: null,
         barcode: nonEmpty(opt.barcode) ?? null,
         dimensions: mergeDimensions(parentDimensions, readDimensions(opt)),
+        images: mapImages(opt.images ?? []),
       }))
     : [];
 

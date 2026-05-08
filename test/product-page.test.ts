@@ -129,6 +129,9 @@ describe("parseProductHtml — variable product (Resina Elora APS - 4g)", () => 
     // sku and price come from /api/product-specific-data; parser leaves them null
     expect(a1!.sku).toBeNull();
     expect(a1!.price).toBeNull();
+    // each variation carries its own gallery (largest image picked)
+    expect(a1!.images.length).toBeGreaterThan(0);
+    expect(a1!.images[0].src).toMatch(/resina-elora-aps-a1-fgm.*_(800x800|1600x1600|600x600)\.png$/);
   });
 
   it("preserves variation names with special characters (DB-A3,5)", () => {

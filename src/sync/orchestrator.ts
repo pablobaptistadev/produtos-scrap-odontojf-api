@@ -121,7 +121,20 @@ export async function runMergeStage(env: Env, sku: string): Promise<void> {
   const effectiveSku = product.external_sku ?? sku;
   const merged = mergeScrapeAndErp({ sku: effectiveSku, scrape: scrape as any, erp });
   await updateMergedResult(env, sku, merged);
-  await enqueueStage(env, { stage: "push", sku });
+
+  // Gate the push stage. By default we mirror everything to the local panel
+  // (D1 + R2 once that lands) and let the user trigger Woo pushes explicitly.
+  const pushEnabled = String(env.WOO_PUSH_ENABLED ?? "").toLowerCase();
+  if (pushEnabled === "1" || pushEnabled === "true" || pushEnabled === "yes") {
+    await enqueueStage(env, { stage: "push", sku });
+  } else {
+    await recordSyncEvent(env, {
+      sku,
+      stage: "merge",
+      level: "info",
+      message: "merged ok — push skipped (WOO_PUSH_ENABLED is off)",
+    });
+  }
 }
 
 export async function runPushStage(env: Env, sku: string): Promise<void> {

@@ -34,6 +34,11 @@ export interface Env {
   DRAIN_BATCH_SIZE?: string;
   REQUEST_TIMEOUT_MS?: string;
   LOG_LEVEL?: string;
+
+  /** When "1" / "true", runMergeStage enqueues the push stage automatically.
+   *  Otherwise products stop at `merged` until /sync/sku/<sku>?stage=push is
+   *  invoked manually. Default: disabled (mirror loja → ERP → painel first). */
+  WOO_PUSH_ENABLED?: string;
 }
 
 export type AppEnv = {
