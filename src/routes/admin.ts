@@ -178,11 +178,14 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
     if (!c.env.MEDIA || !c.env.MEDIA_PUBLIC_BASE_URL) {
       throw new ApiError(503, "R2 bucket not bound (MEDIA + MEDIA_PUBLIC_BASE_URL required)");
     }
+    // Only pick products that still reference the external storefront CDN.
+    // Products with NO media at all (no images/PDFs) shouldn't be picked —
+    // they have nothing to mirror.
     const sql =
       `SELECT sku, scrape_json FROM products
         WHERE scrape_status = 'ok'
           AND scrape_json IS NOT NULL
-          AND scrape_json NOT LIKE '%media.odontoapi%'`
+          AND scrape_json LIKE '%catalogo-mais-odonto%'`
       + (limit > 0 ? ` LIMIT ${limit}` : "");
     const res = await c.env.DB.prepare(sql).all<{ sku: string; scrape_json: string }>();
     let processed = 0;
