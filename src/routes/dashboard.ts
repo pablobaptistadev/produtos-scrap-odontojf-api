@@ -13,7 +13,10 @@ import type { AppEnv } from "../env";
 export function registerDashboardRoutes(app: Hono<AppEnv>): void {
   app.get("/dashboard", (c) => {
     return new Response(DASHBOARD_HTML, {
-      headers: { "content-type": "text/html; charset=utf-8" },
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store, no-cache, must-revalidate",
+      },
     });
   });
 }

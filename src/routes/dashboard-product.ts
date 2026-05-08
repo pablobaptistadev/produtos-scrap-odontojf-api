@@ -13,7 +13,11 @@ import type { AppEnv } from "../env";
 export function registerDashboardProductRoutes(app: Hono<AppEnv>): void {
   app.get("/dashboard/product/:sku", (c) => {
     return new Response(PRODUCT_HTML, {
-      headers: { "content-type": "text/html; charset=utf-8" },
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        // Dashboard markup changes often during this build phase — never cache.
+        "cache-control": "no-store, no-cache, must-revalidate",
+      },
     });
   });
 }
