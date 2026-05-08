@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { fetchWithTimeout, parseIntEnv } from "../core";
 import type { MergedProduct } from "./merge";
+import type { ScrapeResult } from "../scraper/product-page";
 
 /**
  * Media stage — mirror every external image / PDF referenced by a merged
@@ -201,4 +202,112 @@ function guessContentType(key: string): string {
 
 function urlsMatchByBasename(a: string, b: string): boolean {
   return filenameFromUrl(a) === filenameFromUrl(b);
+}
+
+/**
+ * Mirror every external URL referenced inside a ScrapeResult to R2 and rewrite
+ * the URLs in place. Called from runScrapeStage so the scrape_json that lands
+ * on D1 already points at our domain — no external URL ever sticks around.
+ *
+ * Mirrors:
+ *   - parent images               → products/<sku>/scrape/parent/<i>-<basename>
+ *   - per-variation images        → products/<sku>/scrape/variations/<vid>/<i>-<basename>
+ *   - description_images[]        → products/<sku>/scrape/description/<i>-<basename>
+ *   - pdf_urls[]                  → products/<sku>/scrape/pdfs/<i>-<basename>
+ *
+ * Also does a string-level replace on description_html so any inline <img src>
+ * or anchor href that pointed at the original CDN now points at R2.
+ */
+export async function mirrorScrapedMedia(
+  env: Env,
+  scrape: ScrapeResult,
+  sku: string,
+): Promise<{ scrape: ScrapeResult; result: MediaMirrorResult }> {
+  const bucket = env.MEDIA;
+  const publicBase = (env.MEDIA_PUBLIC_BASE_URL ?? "").replace(/\/$/, "");
+  const result: MediaMirrorResult = { attempted: 0, mirrored: 0, alreadyOurs: 0, failed: 0 };
+  const warnings: string[] = [];
+  if (!bucket || !publicBase) {
+    return { scrape, result };
+  }
+
+  const ctx: MirrorContext = {
+    bucket,
+    publicBase,
+    timeoutMs: parseIntEnv(env.REQUEST_TIMEOUT_MS, 15000),
+    userAgent: env.SCRAPE_USER_AGENT ?? "OdontoJfSync/1.0",
+    result,
+    warnings,
+  };
+
+  const safeSku = sku.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const replacements: Array<{ from: string; to: string }> = [];
+
+  // ---- parent images ----
+  for (let i = 0; i < (scrape.images ?? []).length; i++) {
+    const img = scrape.images[i];
+    if (!img?.src) continue;
+    const key = `products/${safeSku}/scrape/parent/${i}-${filenameFromUrl(img.src)}`;
+    const next = await mirror(ctx, img.src, key);
+    if (next && next !== img.src) {
+      replacements.push({ from: img.src, to: next });
+      img.src = next;
+    }
+  }
+
+  // ---- variation images ----
+  for (const v of scrape.variations ?? []) {
+    for (let i = 0; i < (v.images ?? []).length; i++) {
+      const img = v.images[i];
+      if (!img?.src) continue;
+      const key = `products/${safeSku}/scrape/variations/${v.id}/${i}-${filenameFromUrl(img.src)}`;
+      const next = await mirror(ctx, img.src, key);
+      if (next && next !== img.src) {
+        replacements.push({ from: img.src, to: next });
+        img.src = next;
+      }
+    }
+  }
+
+  // ---- description-embed images ----
+  const newDescImgs: string[] = [];
+  for (let i = 0; i < (scrape.description_images ?? []).length; i++) {
+    const src = scrape.description_images[i];
+    if (!src) continue;
+    const key = `products/${safeSku}/scrape/description/${i}-${filenameFromUrl(src)}`;
+    const next = await mirror(ctx, src, key);
+    if (next) {
+      if (next !== src) replacements.push({ from: src, to: next });
+      newDescImgs.push(next);
+    } else {
+      newDescImgs.push(src);
+    }
+  }
+  scrape.description_images = newDescImgs;
+
+  // ---- PDFs ----
+  for (let i = 0; i < (scrape.pdf_urls ?? []).length; i++) {
+    const pdf = scrape.pdf_urls[i];
+    if (!pdf?.url) continue;
+    const key = `products/${safeSku}/scrape/pdfs/${i}-${filenameFromUrl(pdf.url)}`;
+    const next = await mirror(ctx, pdf.url, key);
+    if (next && next !== pdf.url) {
+      replacements.push({ from: pdf.url, to: next });
+      pdf.url = next;
+    }
+  }
+
+  // ---- rewrite description_html ----
+  if (scrape.description_html && replacements.length > 0) {
+    let html = scrape.description_html;
+    for (const r of replacements) {
+      // Replace exact and HTML-encoded variants of the URL.
+      html = html.split(r.from).join(r.to);
+      const enc = r.from.replace(/&/g, "&amp;");
+      if (enc !== r.from) html = html.split(enc).join(r.to);
+    }
+    scrape.description_html = html;
+  }
+
+  return { scrape, result };
 }

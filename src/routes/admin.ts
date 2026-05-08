@@ -1,7 +1,10 @@
 import type { Hono } from "hono";
 import type { AppEnv } from "../env";
-import { ApiError } from "../core";
+import { ApiError, safeJsonParse } from "../core";
 import { enqueueRebuild, enqueueStage } from "../sync/orchestrator";
+import { getProductBySku, updateScrapeResult } from "../db/repo";
+import { mirrorScrapedMedia } from "../sync/media";
+import type { ScrapeResult } from "../scraper/product-page";
 
 /**
  * Destructive admin operations. Every mutating route requires `?confirm=1`
@@ -161,5 +164,55 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
       }
     }
     return c.json({ from, to, enqueued, candidates: res.results?.length ?? 0 });
+  });
+
+  /**
+   * POST /admin/mirror-scraped?limit=<N>
+   *   Backfill: for every product with scrape_status='ok' whose scrape_json
+   *   still references the external CDN, fetch each image/PDF, push it to
+   *   R2 and rewrite the URLs inside the saved scrape_json. Idempotent —
+   *   products already on `media.odontoapi…` are skipped.
+   */
+  app.post("/admin/mirror-scraped", async (c) => {
+    const limit = Math.max(0, Number.parseInt(c.req.query("limit") ?? "50", 10));
+    if (!c.env.MEDIA || !c.env.MEDIA_PUBLIC_BASE_URL) {
+      throw new ApiError(503, "R2 bucket not bound (MEDIA + MEDIA_PUBLIC_BASE_URL required)");
+    }
+    const sql =
+      `SELECT sku, scrape_json FROM products
+        WHERE scrape_status = 'ok'
+          AND scrape_json IS NOT NULL
+          AND scrape_json NOT LIKE '%media.odontoapi%'`
+      + (limit > 0 ? ` LIMIT ${limit}` : "");
+    const res = await c.env.DB.prepare(sql).all<{ sku: string; scrape_json: string }>();
+    let processed = 0;
+    let mirrored = 0;
+    let failed = 0;
+    let alreadyOurs = 0;
+    const skuErrors: string[] = [];
+
+    for (const row of res.results ?? []) {
+      try {
+        const scrape = safeJsonParse<ScrapeResult>(row.scrape_json);
+        if (!scrape) { failed++; continue; }
+        const result = await mirrorScrapedMedia(c.env, scrape, scrape.detected_sku ?? row.sku);
+        await updateScrapeResult(c.env, row.sku, { status: "ok", json: scrape });
+        processed++;
+        mirrored += result.result.mirrored;
+        failed += result.result.failed;
+        alreadyOurs += result.result.alreadyOurs;
+      } catch (err) {
+        failed++;
+        skuErrors.push(`${row.sku}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return c.json({
+      candidates: res.results?.length ?? 0,
+      processed,
+      files_mirrored: mirrored,
+      files_already_in_r2: alreadyOurs,
+      files_failed: failed,
+      sku_errors: skuErrors.slice(0, 10),
+    });
   });
 }

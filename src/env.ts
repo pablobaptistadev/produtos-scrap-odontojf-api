@@ -55,6 +55,11 @@ export interface Env {
   AUTO_ENQUEUE_ERP?: string;
   AUTO_ENQUEUE_MERGE?: string;
   AUTO_ENQUEUE_MEDIA?: string;
+
+  /** When unset OR "1" / "true": runScrapeStage mirrors every external image
+   *  / PDF to R2 immediately after the scrape and rewrites the URLs inside
+   *  scrape_json. Set to "0" to keep the original storefront URLs. */
+  SCRAPE_AUTO_MIRROR?: string;
 }
 
 export type AppEnv = {

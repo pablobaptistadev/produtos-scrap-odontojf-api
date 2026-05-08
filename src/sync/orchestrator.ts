@@ -13,7 +13,7 @@ import { fetchProductPage } from "../scraper/product-page";
 import { resolveSku } from "../scraper/sku-resolver";
 import { fetchProductFromErp } from "../erp/client";
 import { mergeScrapeAndErp, type MergedProduct } from "./merge";
-import { mirrorProductMedia } from "./media";
+import { mirrorProductMedia, mirrorScrapedMedia } from "./media";
 import { upsertWooProduct } from "../woo/client";
 import {
   updateScrapeResult,
@@ -90,6 +90,25 @@ export async function runScrapeStage(env: Env, sku: string, url: string): Promis
   try {
     const scrape = await fetchProductPage(env, url);
     const externalSku = scrape.detected_sku && scrape.detected_sku !== sku ? scrape.detected_sku : null;
+
+    // Mirror media to R2 INSIDE the scrape stage (default ON when MEDIA is bound).
+    // This way the scrape_json that lands on D1 already points to our domain
+    // and the painel never displays an external URL — even before merge runs.
+    // Set SCRAPE_AUTO_MIRROR=0 to opt out.
+    const autoMirror = env.MEDIA && String(env.SCRAPE_AUTO_MIRROR ?? "1").toLowerCase() !== "0";
+    if (autoMirror) {
+      const { result } = await mirrorScrapedMedia(env, scrape, externalSku ?? sku);
+      if (result.failed > 0) {
+        await recordSyncEvent(env, {
+          sku,
+          stage: "scrape",
+          level: "warn",
+          message: `media: ${result.mirrored}/${result.attempted} mirrored, ${result.failed} failed`,
+          context: result,
+        });
+      }
+    }
+
     await updateScrapeResult(env, sku, { status: "ok", json: scrape, externalSku });
     if (isFlagOn(env.AUTO_ENQUEUE_ERP)) {
       await enqueueStage(env, { stage: "erp", sku, slug: scrape.slug, url: scrape.url });
