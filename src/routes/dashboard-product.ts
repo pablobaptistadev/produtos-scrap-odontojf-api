@@ -67,6 +67,12 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
     .header .breadcrumb { font-size: 12px; color: var(--text-2); margin-bottom: 10px; letter-spacing: 0.5px; }
     .header h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.15; letter-spacing: -0.5px; font-weight: 700; }
     .header .meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .id-row { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 0 0; padding: 12px 14px; background: rgba(56, 189, 248, 0.06); border: 1px solid rgba(56, 189, 248, 0.18); border-radius: 12px; }
+    .id-cell { display: flex; flex-direction: column; gap: 2px; min-width: 110px; }
+    .id-cell .id-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-2); font-weight: 600; }
+    .id-cell .id-value { font-family: ui-monospace, SFMono-Regular, "Menlo", monospace; font-size: 15px; color: var(--text-0); font-weight: 600; }
+    .id-cell .id-value.empty { color: var(--text-2); font-weight: 400; }
+    .id-sep { width: 1px; align-self: stretch; background: rgba(120, 140, 220, 0.18); }
     .badges { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
     .badge.simple { background: rgba(56, 189, 248, 0.15); color: var(--accent); }
@@ -231,10 +237,36 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
       ? '<span class="badge ' + esc(pillClass(m.status)) + '">' + esc(m.status) + '</span>'
       : '';
     const typeBadge = '<span class="badge ' + esc(m.type || 'simple') + '">' + esc(m.type || 'simple') + '</span>';
+
+    // Identity row: same SKU across loja / ERP / Woo (Woo is set after push).
+    // - Loja: detected_sku captured from /api/product-specific-data (the "Código do produto").
+    // - ERP : the `codigo` field from the Space Informática product response, when available.
+    // - Woo : the woo_product_id assigned after a successful push to /products.
+    const lojaSku = m.sku || '—';
+    const erpData = p && p.erp && p.erp.data;
+    let erpCodigo = null;
+    if (erpData && typeof erpData === 'object') {
+      // Space ERP wraps the actual product under `produtos[0]`.
+      const list = erpData.produtos;
+      const node = Array.isArray(list) && list.length > 0 ? list[0] : (erpData.produto || erpData.Produto || erpData);
+      if (node && (node.codigo != null || node.Codigo != null || node.code != null)) {
+        erpCodigo = String(node.codigo ?? node.Codigo ?? node.code);
+      }
+    }
+    const wooId = p && p.woo && p.woo.product_id ? String(p.woo.product_id) : null;
+    const erpStatus = p && p.erp && p.erp.status;
+    const wooStatus = p && p.woo && p.woo.status;
+    const erpDisplay = erpCodigo
+      ? '<span class="id-value">' + esc(erpCodigo) + '</span>'
+      : '<span class="id-value empty">' + (erpStatus === 'skipped' ? 'ERP não configurado' : (erpStatus || '—')) + '</span>';
+    const wooDisplay = wooId
+      ? '<span class="id-value">' + esc(wooId) + '</span>'
+      : '<span class="id-value empty">' + (wooStatus === 'pending' ? 'aguardando push' : (wooStatus || '—')) + '</span>';
+
     return [
       '<div class="topbar">',
         '<a class="back" href="/dashboard?key=' + encodeURIComponent(apiKey) + '">← voltar ao dashboard</a>',
-        '<div style="font-size:12px;color:var(--text-2)">SKU <strong style="color:var(--text-0);font-family:ui-monospace,monospace">' + esc(m.sku) + '</strong></div>',
+        '<div style="font-size:12px;color:var(--text-2)">SKU <strong style="color:var(--text-0);font-family:ui-monospace,monospace">' + esc(lojaSku) + '</strong></div>',
       '</div>',
       '<div class="header">',
         '<div class="breadcrumb">' + (m.categories || []).map(c => esc(c.name)).join(' › ') + '</div>',
@@ -244,6 +276,13 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
           (m.brand ? '<span class="sub">Marca <strong>' + esc(m.brand) + '</strong></span>' : ''),
           (m.short_description ? '<span class="sub">' + esc(m.short_description) + '</span>' : ''),
           (m.source_url ? '<span class="sub"><a href="' + esc(m.source_url) + '" target="_blank">ver na loja ↗</a></span>' : ''),
+        '</div>',
+        '<div class="id-row">',
+          '<div class="id-cell"><span class="id-label">SKU · Loja</span><span class="id-value">' + esc(lojaSku) + '</span></div>',
+          '<div class="id-sep"></div>',
+          '<div class="id-cell"><span class="id-label">SKU · ERP</span>' + erpDisplay + '</div>',
+          '<div class="id-sep"></div>',
+          '<div class="id-cell"><span class="id-label">ID · Woo</span>' + wooDisplay + '</div>',
         '</div>',
       '</div>'
     ].join('');
