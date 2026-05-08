@@ -284,8 +284,25 @@ export function mergeScrapeAndErp(input: {
   const variationAxisName = "Variação"; // generic; storefront doesn't label the axis
   const parentImages = scrape?.images ?? [];
 
+  // Parent dimensions used as fallback for any variation that doesn't override.
+  // 0 is treated as "unspecified" (physical products never weigh 0kg).
+  const parentDimsRaw = scrape?.dimensions ?? { weight: null, length: null, width: null, height: null };
+  const fbDim = (c: number | null | undefined, p: number | null | undefined): number | null => {
+    if (c != null && c !== 0) return c;
+    if (p != null && p !== 0) return p;
+    return null;
+  };
+
   const variations: MergedVariation[] = scrapeVars.map((v) => {
-    const dims = v.dimensions ?? { weight: null, length: null, width: null, height: null };
+    const vDims = v.dimensions ?? { weight: null, length: null, width: null, height: null };
+    // Variation → parent fallback (safety net; parser already does this on
+    // fresh scrapes but legacy rows in D1 may pre-date that change).
+    const dims = {
+      weight: fbDim(vDims.weight, parentDimsRaw.weight),
+      length: fbDim(vDims.length, parentDimsRaw.length),
+      width: fbDim(vDims.width, parentDimsRaw.width),
+      height: fbDim(vDims.height, parentDimsRaw.height),
+    };
     const image = pickFirstImage(v.images, parentImages);
     const variationMeta: Array<{ key: string; value: string }> = [];
     if (v.barcode) variationMeta.push({ key: "_odontojf_barcode", value: v.barcode });

@@ -435,22 +435,31 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
         barcode: s.barcode || null,
         provider_code: s.provider_code || null,
         attributes: s.brand ? [{ name: 'Marca', options: [s.brand], variation: false, visible: true }] : [],
-        variations: (s.variations || []).map(v => ({
-          name: v.name,
-          sku: v.sku,
-          provider_code: v.provider_code,
-          barcode: v.barcode,
-          regular_price: v.price,
-          stock_quantity: v.stock_qty,
-          stock_status: v.stock_status === 'in_stock' ? 'instock' : v.stock_status === 'out_of_stock' ? 'outofstock' : null,
-          weight: v.dimensions && v.dimensions.weight != null ? String(v.dimensions.weight) : null,
-          dimensions: {
-            length: v.dimensions && v.dimensions.length != null ? String(v.dimensions.length) : '',
-            width: v.dimensions && v.dimensions.width != null ? String(v.dimensions.width) : '',
-            height: v.dimensions && v.dimensions.height != null ? String(v.dimensions.height) : '',
-          },
-          image: v.images && v.images[0] ? { src: v.images[0].src || v.images[0] } : null,
-        })),
+        variations: (s.variations || []).map(v => {
+          // Variation dims fall back to parent field-by-field. 0 is treated as missing.
+          const vd = v.dimensions || {};
+          const fbd = (c, p) => (c != null && c !== 0) ? c : (p != null && p !== 0 ? p : null);
+          const w = fbd(vd.weight, dims.weight);
+          const lg = fbd(vd.length, dims.length);
+          const wd = fbd(vd.width, dims.width);
+          const hg = fbd(vd.height, dims.height);
+          return {
+            name: v.name,
+            sku: v.sku,
+            provider_code: v.provider_code,
+            barcode: v.barcode,
+            regular_price: v.price,
+            stock_quantity: v.stock_qty,
+            stock_status: v.stock_status === 'in_stock' ? 'instock' : v.stock_status === 'out_of_stock' ? 'outofstock' : null,
+            weight: w != null ? String(w) : null,
+            dimensions: {
+              length: lg != null ? String(lg) : '',
+              width: wd != null ? String(wd) : '',
+              height: hg != null ? String(hg) : '',
+            },
+            image: v.images && v.images[0] ? { src: v.images[0].src || v.images[0] } : null,
+          };
+        }),
         video_urls: s.video_urls || [],
         pdf_urls: s.pdf_urls || [],
         meta_data: [],

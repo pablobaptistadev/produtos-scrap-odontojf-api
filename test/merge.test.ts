@@ -144,6 +144,55 @@ describe("mergeScrapeAndErp — categories", () => {
   });
 });
 
+describe("mergeScrapeAndErp — variation dimension fallback", () => {
+  it("falls back to parent dimensions when the variation has null/missing values", () => {
+    const scrape: any = {
+      ...baseScrape,
+      type: "variable",
+      dimensions: { weight: 0.85, length: 34, width: 16, height: 10 },
+      variations: [
+        // Variation with no dimensions at all → should inherit parent's
+        {
+          id: "v-empty", sku: "X1", name: "Adulto",
+          provider_code: null, barcode: null,
+          price: "121.15", price_text: "R$ 121,15",
+          stock_status: "in_stock", stock_qty: 3,
+          dimensions: { weight: null, length: null, width: null, height: null },
+          images: [],
+        },
+        // Variation with explicit overrides → should keep its own
+        {
+          id: "v-own", sku: "X2", name: "Bebê",
+          provider_code: null, barcode: null,
+          price: "59.99", price_text: "R$ 59,99",
+          stock_status: "in_stock", stock_qty: 5,
+          dimensions: { weight: 0.4, length: 20, width: 10, height: 8 },
+          images: [],
+        },
+        // Variation with zeros → treated as unspecified, falls back to parent
+        {
+          id: "v-zero", sku: "X3", name: "Mini",
+          provider_code: null, barcode: null,
+          price: "29.99", price_text: "R$ 29,99",
+          stock_status: "in_stock", stock_qty: 1,
+          dimensions: { weight: 0, length: 0, width: 0, height: 0 },
+          images: [],
+        },
+      ],
+    };
+    const merged = mergeScrapeAndErp({ sku: "X1", scrape, erp: null });
+    const adulto = merged.variations.find((v) => v.name === "Adulto");
+    expect(adulto?.weight).toBe("0.85");
+    expect(adulto?.dimensions).toEqual({ length: "34", width: "16", height: "10" });
+    const bebe = merged.variations.find((v) => v.name === "Bebê");
+    expect(bebe?.weight).toBe("0.4");
+    expect(bebe?.dimensions).toEqual({ length: "20", width: "10", height: "8" });
+    const mini = merged.variations.find((v) => v.name === "Mini");
+    expect(mini?.weight).toBe("0.85");
+    expect(mini?.dimensions).toEqual({ length: "34", width: "16", height: "10" });
+  });
+});
+
 describe("mergeScrapeAndErp — variable products", () => {
   const variableScrape: any = {
     ...baseScrape,

@@ -650,12 +650,16 @@ function readDimensions(src: { weight?: number | null; length?: number | null; w
   };
 }
 
-/** Take field-by-field overrides from variation; fall back to parent for any null. */
+/** Take field-by-field overrides from variation; fall back to parent for any
+ *  missing value (null/undefined OR 0 — physical products never legitimately
+ *  weigh 0kg or measure 0cm, so a zero is the storefront's "unspecified"). */
 function mergeDimensions(parent: ScrapeDimensions, child: ScrapeDimensions): ScrapeDimensions {
+  const fb = (c: number | null, p: number | null): number | null =>
+    c != null && c !== 0 ? c : p;
   return {
-    weight: child.weight ?? parent.weight,
-    length: child.length ?? parent.length,
-    width: child.width ?? parent.width,
-    height: child.height ?? parent.height,
+    weight: fb(child.weight, parent.weight),
+    length: fb(child.length, parent.length),
+    width: fb(child.width, parent.width),
+    height: fb(child.height, parent.height),
   };
 }
