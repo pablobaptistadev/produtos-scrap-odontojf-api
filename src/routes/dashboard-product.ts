@@ -375,7 +375,63 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
       return;
     }
     const product = await res.json();
-    const merged = (product.merged && typeof product.merged === 'object') ? product.merged : null;
+    let merged = (product.merged && typeof product.merged === 'object') ? product.merged : null;
+    let isPreMerge = false;
+
+    // Fallback: when the merge stage hasn't run yet but scrape did, build a
+    // display-only "pseudo-merged" record so the preview still shows everything
+    // the scraper captured (gallery, price, stock, variations, videos, PDFs).
+    if (!merged && product.scrape && product.scrape.data) {
+      const s = product.scrape.data;
+      const dims = s.dimensions || {};
+      merged = {
+        sku: s.detected_sku || product.sku,
+        type: s.type || 'simple',
+        name: s.title || product.sku,
+        slug: s.slug,
+        status: null,
+        description: s.description_html || s.description || null,
+        short_description: s.short_description || null,
+        brand: s.brand || null,
+        categories: (s.category || []).map(name => ({ name })),
+        images: (s.images || []).map(img => ({ src: img.src || img })),
+        regular_price: s.price || null,
+        sale_price: null,
+        stock_quantity: s.stock_qty != null ? s.stock_qty : null,
+        stock_status: s.stock_status === 'in_stock' ? 'instock' : s.stock_status === 'out_of_stock' ? 'outofstock' : null,
+        weight: dims.weight != null ? String(dims.weight) : null,
+        dimensions: {
+          length: dims.length != null ? String(dims.length) : '',
+          width: dims.width != null ? String(dims.width) : '',
+          height: dims.height != null ? String(dims.height) : '',
+        },
+        barcode: s.barcode || null,
+        provider_code: s.provider_code || null,
+        attributes: s.brand ? [{ name: 'Marca', options: [s.brand], variation: false, visible: true }] : [],
+        variations: (s.variations || []).map(v => ({
+          name: v.name,
+          sku: v.sku,
+          provider_code: v.provider_code,
+          barcode: v.barcode,
+          regular_price: v.price,
+          stock_quantity: v.stock_qty,
+          stock_status: v.stock_status === 'in_stock' ? 'instock' : v.stock_status === 'out_of_stock' ? 'outofstock' : null,
+          weight: v.dimensions && v.dimensions.weight != null ? String(v.dimensions.weight) : null,
+          dimensions: {
+            length: v.dimensions && v.dimensions.length != null ? String(v.dimensions.length) : '',
+            width: v.dimensions && v.dimensions.width != null ? String(v.dimensions.width) : '',
+            height: v.dimensions && v.dimensions.height != null ? String(v.dimensions.height) : '',
+          },
+          image: v.images && v.images[0] ? { src: v.images[0].src || v.images[0] } : null,
+        })),
+        video_urls: s.video_urls || [],
+        pdf_urls: s.pdf_urls || [],
+        meta_data: [],
+        warnings: [],
+        source_url: s.url || product.source_url,
+      };
+      isPreMerge = true;
+    }
 
     // Build images: parent gallery → variations[].image (when not in parent already) → meta_data video extras
     const galleryImages = [];
@@ -391,10 +447,15 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
       }
     }
 
+    const preBanner = isPreMerge
+      ? '<div class="warnings"><strong>⚠ Pré-merge:</strong> mostrando apenas dados do scrape da loja. ERP/merge ainda não rodaram para este SKU.</div>'
+      : '';
+
     const html = !merged
-      ? '<div class="topbar"><a class="back" href="/dashboard?key=' + encodeURIComponent(apiKey) + '">← voltar</a></div><div class="header"><h1>' + esc(product.sku) + '</h1><div class="meta"><span class="sub">Produto sem merge ainda. Scrape: <strong>' + esc(product.scrape && product.scrape.status || '—') + '</strong></span></div></div>' + renderTimeline(product) + renderRaw(product)
+      ? '<div class="topbar"><a class="back" href="/dashboard?key=' + encodeURIComponent(apiKey) + '">← voltar</a></div><div class="header"><h1>' + esc(product.sku) + '</h1><div class="meta"><span class="sub">Sem dados ainda. Scrape: <strong>' + esc((product.scrape && product.scrape.status) || 'pending') + '</strong></span></div></div>' + renderTimeline(product) + renderRaw(product)
       : [
         renderHeader(product, merged),
+        preBanner,
         renderWarnings(merged),
         '<div class="split">',
           '<div class="col">',

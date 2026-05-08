@@ -294,12 +294,23 @@ const DASHBOARD_HTML = /* html */ `<!doctype html>
       }
       const table = document.createElement('table');
       const headers = data.headers;
-      table.innerHTML = '<thead><tr>' + headers.map(h => '<th>' + h.label + '</th>').join('') + '</tr></thead><tbody></tbody>';
+      // Append a final "" header for the "Abrir" action button column.
+      table.innerHTML = '<thead><tr>' + headers.map(h => '<th>' + h.label + '</th>').join('') + '<th></th></tr></thead><tbody></tbody>';
       const tbody = table.querySelector('tbody');
+      // Figure out which header carries an SKU we can link to a preview page.
+      // Products tab → use _id (which IS the sku). Queue/events → use item.SKU column.
+      const previewTarget = (item) => {
+        if (state.tab === 'products') return item._id;
+        const candidate = item.SKU;
+        if (candidate && candidate !== '—' && typeof candidate === 'string') return candidate;
+        return null;
+      };
+
       data.items.forEach(item => {
         const tr = document.createElement('tr');
         tr.dataset.id = item._id;
         if (state.selected === item._id) tr.classList.add('selected');
+        const target = previewTarget(item);
         headers.forEach(h => {
           const td = document.createElement('td');
           const v = item[h.field];
@@ -308,7 +319,21 @@ const DASHBOARD_HTML = /* html */ `<!doctype html>
             td.innerHTML = v ? '<span class="pill ' + cls + '">' + v + '</span>' : '<span class="pill">--</span>';
           } else if (h.kind === 'mono') {
             td.className = 'mono';
-            td.textContent = v == null ? '--' : String(v);
+            // SKU column → clickable link to /dashboard/product/<sku>
+            if (h.field === 'SKU' && target) {
+              const a = document.createElement('a');
+              a.href = '/dashboard/product/' + encodeURIComponent(target) + '?key=' + encodeURIComponent(apiKey);
+              a.target = '_blank';
+              a.textContent = String(v ?? target);
+              a.style.color = 'var(--accent)';
+              a.style.textDecoration = 'none';
+              a.style.cursor = 'pointer';
+              a.title = 'Abrir produto em nova aba';
+              a.addEventListener('click', (e) => e.stopPropagation());
+              td.appendChild(a);
+            } else {
+              td.textContent = v == null ? '--' : String(v);
+            }
           } else if (h.kind === 'time') {
             td.textContent = fmtMs(v);
           } else if (h.kind === 'date') {
@@ -318,27 +343,30 @@ const DASHBOARD_HTML = /* html */ `<!doctype html>
           }
           tr.appendChild(td);
         });
+        // "Abrir" action column (last cell) — always present whenever the row has a sku
+        const openTd = document.createElement('td');
+        openTd.style.textAlign = 'right';
+        openTd.style.paddingRight = '14px';
+        openTd.style.whiteSpace = 'nowrap';
+        if (target) {
+          openTd.innerHTML = '<a href="/dashboard/product/' + encodeURIComponent(target) + '?key=' + encodeURIComponent(apiKey) + '" target="_blank" title="Abrir preview do produto" style="color:var(--accent);font-size:11px;font-weight:600;text-decoration:none;padding:4px 10px;border:1px solid rgba(56,189,248,0.32);border-radius:6px;background:rgba(56,189,248,0.08)">abrir ↗</a>';
+          openTd.querySelector('a').addEventListener('click', (e) => e.stopPropagation());
+        } else {
+          openTd.innerHTML = '<span style="color:var(--text-2);font-size:11px">—</span>';
+        }
+        tr.appendChild(openTd);
+
         tr.addEventListener('click', (e) => {
-          // For the products tab, single click selects + shows side detail;
-          // double click (or cmd/ctrl-click) opens the full product preview page.
-          if (state.tab === 'products') {
-            const url = '/dashboard/product/' + encodeURIComponent(item._id) + '?key=' + encodeURIComponent(apiKey);
-            if (e.detail >= 2 || e.metaKey || e.ctrlKey) { window.open(url, '_blank'); return; }
+          // double-click (or cmd/ctrl-click) anywhere on the row opens the preview
+          if (target && (e.detail >= 2 || e.metaKey || e.ctrlKey)) {
+            window.open('/dashboard/product/' + encodeURIComponent(target) + '?key=' + encodeURIComponent(apiKey), '_blank');
+            return;
           }
           state.selected = item._id;
           loadDetail(item);
           document.querySelectorAll('.list tbody tr').forEach(r => r.classList.remove('selected'));
           tr.classList.add('selected');
         });
-        if (state.tab === 'products') {
-          // also add an explicit "abrir" link in the row's last cell so it's discoverable
-          const openTd = document.createElement('td');
-          openTd.style.textAlign = 'right';
-          openTd.style.paddingRight = '14px';
-          openTd.innerHTML = '<a href="/dashboard/product/' + encodeURIComponent(item._id) + '?key=' + encodeURIComponent(apiKey) + '" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none">abrir ↗</a>';
-          openTd.addEventListener('click', (e) => e.stopPropagation());
-          tr.appendChild(openTd);
-        }
         tbody.appendChild(tr);
       });
       body.innerHTML = '';
@@ -355,6 +383,21 @@ const DASHBOARD_HTML = /* html */ `<!doctype html>
     const body = document.getElementById('detail-body');
     document.getElementById('detail-id').textContent = '#' + item._id;
     body.innerHTML = '';
+
+    // Top action: if the item has an SKU, surface a big button that opens the
+    // full product preview (gallery, prices, variations, videos, PDFs).
+    const sku = state.tab === 'products' ? item._id : (item.SKU && item.SKU !== '—' ? item.SKU : null);
+    if (sku) {
+      const action = document.createElement('a');
+      action.href = '/dashboard/product/' + encodeURIComponent(sku) + '?key=' + encodeURIComponent(apiKey);
+      action.target = '_blank';
+      action.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.32);border-radius:10px;text-decoration:none;color:var(--accent);font-weight:600;margin-bottom:18px;transition:background 100ms';
+      action.onmouseover = () => action.style.background = 'rgba(56,189,248,0.22)';
+      action.onmouseout = () => action.style.background = 'rgba(56,189,248,0.12)';
+      action.innerHTML = '<span>🔗 Abrir produto · <span style="font-family:ui-monospace,monospace;font-size:13px">' + sku + '</span></span><span style="font-size:12px">galeria, preços, variações ↗</span>';
+      body.appendChild(action);
+    }
+
     const fields = item._detail || Object.entries(item).filter(([k]) => !k.startsWith('_'));
     fields.forEach(([key, value]) => {
       const block = document.createElement('div');
