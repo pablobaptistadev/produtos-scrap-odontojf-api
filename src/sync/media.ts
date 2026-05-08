@@ -36,8 +36,10 @@ export interface MediaMirrorResult {
   mirrored: number;
   /** Skipped because the URL was already on our public domain. */
   alreadyOurs: number;
-  /** Failures (kept on the merged.warnings[] so callers see them). */
+  /** Transient failures (5xx, network) — caller may decide to retry. */
   failed: number;
+  /** Permanent failures (4xx) — the source URL is gone, retry won't help. */
+  permanent_failed: number;
 }
 
 interface MirrorContext {
@@ -57,7 +59,7 @@ export async function mirrorProductMedia(
 ): Promise<{ merged: MergedProduct; result: MediaMirrorResult }> {
   const bucket = env.MEDIA;
   const publicBase = (env.MEDIA_PUBLIC_BASE_URL ?? "").replace(/\/$/, "");
-  const result: MediaMirrorResult = { attempted: 0, mirrored: 0, alreadyOurs: 0, failed: 0 };
+  const result: MediaMirrorResult = { attempted: 0, mirrored: 0, alreadyOurs: 0, failed: 0, permanent_failed: 0 };
 
   if (!bucket || !publicBase) {
     merged.warnings.push("media stage skipped: MEDIA bucket or MEDIA_PUBLIC_BASE_URL not configured");
@@ -134,11 +136,14 @@ async function mirror(
       return `${ctx.publicBase}/${key}`;
     }
 
-    // Try up to 3 times with exponential backoff. The storefront CDN
-    // occasionally returns transient 5xx / connection resets — losing a
-    // single image because of that would mean the user can never recover
-    // the asset later (the original URL might rotate).
+    // Try up to 3 times with exponential backoff. We split outcomes:
+    //   - permanent (4xx): the storefront has removed/rotated this asset.
+    //     Re-trying the whole scrape won't help. Increment permanent_failed
+    //     and return null without flagging the row as a transient failure.
+    //   - transient (5xx, network): retry up to 3 times, then count as
+    //     transient `failed` so the caller can decide to retry the scrape.
     let lastErr: string | null = null;
+    let permanent = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 200 * attempt * attempt));
       try {
@@ -148,8 +153,10 @@ async function mirror(
         });
         if (!res.ok) {
           lastErr = `HTTP ${res.status}`;
-          // 4xx is permanent — don't retry
-          if (res.status >= 400 && res.status < 500) break;
+          if (res.status >= 400 && res.status < 500) {
+            permanent = true;
+            break;
+          }
           continue;
         }
         const contentType = res.headers.get("content-type") ?? guessContentType(key);
@@ -174,12 +181,17 @@ async function mirror(
         lastErr = err instanceof Error ? err.message : String(err);
       }
     }
-    ctx.warnings.push(`media: failed to mirror ${url} → ${key}: ${lastErr ?? "unknown"}`);
-    ctx.result.failed++;
+    if (permanent) {
+      ctx.warnings.push(`media: source rotated ${url} (${lastErr})`);
+      ctx.result.permanent_failed++;
+    } else {
+      ctx.warnings.push(`media: transient failure ${url} → ${key}: ${lastErr ?? "unknown"}`);
+      ctx.result.failed++;
+    }
     return null;
   } catch (err) {
     ctx.warnings.push(
-      `media: failed to mirror ${url} → ${key}: ${err instanceof Error ? err.message : String(err)}`,
+      `media: transient failure ${url} → ${key}: ${err instanceof Error ? err.message : String(err)}`,
     );
     ctx.result.failed++;
     return null;
@@ -217,6 +229,10 @@ function urlsMatchByBasename(a: string, b: string): boolean {
   return filenameFromUrl(a) === filenameFromUrl(b);
 }
 
+function escapeForRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Mirror every external URL referenced inside a ScrapeResult to R2 and rewrite
  * the URLs in place. Called from runScrapeStage so the scrape_json that lands
@@ -238,7 +254,7 @@ export async function mirrorScrapedMedia(
 ): Promise<{ scrape: ScrapeResult; result: MediaMirrorResult }> {
   const bucket = env.MEDIA;
   const publicBase = (env.MEDIA_PUBLIC_BASE_URL ?? "").replace(/\/$/, "");
-  const result: MediaMirrorResult = { attempted: 0, mirrored: 0, alreadyOurs: 0, failed: 0 };
+  const result: MediaMirrorResult = { attempted: 0, mirrored: 0, alreadyOurs: 0, failed: 0, permanent_failed: 0 };
   const warnings: string[] = [];
   if (!bucket || !publicBase) {
     return { scrape, result };
@@ -255,31 +271,58 @@ export async function mirrorScrapedMedia(
 
   const safeSku = sku.replace(/[^a-zA-Z0-9._-]/g, "_");
   const replacements: Array<{ from: string; to: string }> = [];
+  // URLs that returned 4xx — to be also stripped out of description_html.
+  const droppedUrls: string[] = [];
+
+  /** mirror a single URL and return one of:
+   *    "ok"        — replace original with `next`
+   *    "drop"      — source is gone (4xx); strip from arrays
+   *    "transient" — kept original (caller will fail the scrape) */
+  async function mirrorOne(url: string, key: string): Promise<{ status: "ok" | "drop" | "transient"; next: string | null }> {
+    const beforePerm = ctx.result.permanent_failed;
+    const beforeFail = ctx.result.failed;
+    const next = await mirror(ctx, url, key);
+    if (next) return { status: "ok", next };
+    if (ctx.result.permanent_failed > beforePerm) return { status: "drop", next: null };
+    return { status: "transient", next: null };
+  }
 
   // ---- parent images ----
+  const newParent: typeof scrape.images = [];
   for (let i = 0; i < (scrape.images ?? []).length; i++) {
     const img = scrape.images[i];
     if (!img?.src) continue;
     const key = `products/${safeSku}/scrape/parent/${i}-${filenameFromUrl(img.src)}`;
-    const next = await mirror(ctx, img.src, key);
-    if (next && next !== img.src) {
-      replacements.push({ from: img.src, to: next });
-      img.src = next;
+    const r = await mirrorOne(img.src, key);
+    if (r.status === "ok" && r.next) {
+      if (r.next !== img.src) replacements.push({ from: img.src, to: r.next });
+      newParent.push({ src: r.next, alt: img.alt ?? null });
+    } else if (r.status === "drop") {
+      droppedUrls.push(img.src); // source rotated → forget about this image
+    } else {
+      newParent.push(img); // transient: keep so caller can retry
     }
   }
+  scrape.images = newParent;
 
   // ---- variation images ----
   for (const v of scrape.variations ?? []) {
+    const newVarImgs: typeof v.images = [];
     for (let i = 0; i < (v.images ?? []).length; i++) {
       const img = v.images[i];
       if (!img?.src) continue;
       const key = `products/${safeSku}/scrape/variations/${v.id}/${i}-${filenameFromUrl(img.src)}`;
-      const next = await mirror(ctx, img.src, key);
-      if (next && next !== img.src) {
-        replacements.push({ from: img.src, to: next });
-        img.src = next;
+      const r = await mirrorOne(img.src, key);
+      if (r.status === "ok" && r.next) {
+        if (r.next !== img.src) replacements.push({ from: img.src, to: r.next });
+        newVarImgs.push({ src: r.next, alt: img.alt ?? null });
+      } else if (r.status === "drop") {
+        droppedUrls.push(img.src);
+      } else {
+        newVarImgs.push(img);
       }
     }
+    v.images = newVarImgs;
   }
 
   // ---- description-embed images ----
@@ -288,10 +331,12 @@ export async function mirrorScrapedMedia(
     const src = scrape.description_images[i];
     if (!src) continue;
     const key = `products/${safeSku}/scrape/description/${i}-${filenameFromUrl(src)}`;
-    const next = await mirror(ctx, src, key);
-    if (next) {
-      if (next !== src) replacements.push({ from: src, to: next });
-      newDescImgs.push(next);
+    const r = await mirrorOne(src, key);
+    if (r.status === "ok" && r.next) {
+      if (r.next !== src) replacements.push({ from: src, to: r.next });
+      newDescImgs.push(r.next);
+    } else if (r.status === "drop") {
+      droppedUrls.push(src);
     } else {
       newDescImgs.push(src);
     }
@@ -299,25 +344,42 @@ export async function mirrorScrapedMedia(
   scrape.description_images = newDescImgs;
 
   // ---- PDFs ----
+  const newPdfs: typeof scrape.pdf_urls = [];
   for (let i = 0; i < (scrape.pdf_urls ?? []).length; i++) {
     const pdf = scrape.pdf_urls[i];
     if (!pdf?.url) continue;
     const key = `products/${safeSku}/scrape/pdfs/${i}-${filenameFromUrl(pdf.url)}`;
-    const next = await mirror(ctx, pdf.url, key);
-    if (next && next !== pdf.url) {
-      replacements.push({ from: pdf.url, to: next });
-      pdf.url = next;
+    const r = await mirrorOne(pdf.url, key);
+    if (r.status === "ok" && r.next) {
+      if (r.next !== pdf.url) replacements.push({ from: pdf.url, to: r.next });
+      newPdfs.push({ ...pdf, url: r.next });
+    } else if (r.status === "drop") {
+      droppedUrls.push(pdf.url);
+    } else {
+      newPdfs.push(pdf);
     }
   }
+  scrape.pdf_urls = newPdfs;
 
   // ---- rewrite description_html ----
-  if (scrape.description_html && replacements.length > 0) {
+  if (scrape.description_html) {
     let html = scrape.description_html;
     for (const r of replacements) {
       // Replace exact and HTML-encoded variants of the URL.
       html = html.split(r.from).join(r.to);
       const enc = r.from.replace(/&/g, "&amp;");
       if (enc !== r.from) html = html.split(enc).join(r.to);
+    }
+    // Strip <img> / <a href="..."> tags that referenced URLs we couldn't mirror
+    // (4xx / source rotated). Better to render nothing than a broken image.
+    for (const dead of droppedUrls) {
+      const variants = [dead, dead.replace(/&/g, "&amp;")];
+      for (const v of variants) {
+        // Drop the entire <img …src="DEAD"…> tag, including srcset variants.
+        html = html.replace(new RegExp(`<img[^>]*src="${escapeForRegex(v)}"[^>]*/?>`, "gi"), "");
+        // Drop hyperlinks that wrapped the dead URL.
+        html = html.replace(new RegExp(`<a[^>]*href="${escapeForRegex(v)}"[^>]*>[\\s\\S]*?</a>`, "gi"), "");
+      }
     }
     scrape.description_html = html;
   }

@@ -104,15 +104,29 @@ export async function runScrapeStage(env: Env, sku: string, url: string): Promis
         );
       }
       const { result } = await mirrorScrapedMedia(env, scrape, externalSku ?? sku);
+      // Only transient failures (5xx / network) trigger a scrape retry.
+      // Permanent failures (4xx) mean the storefront rotated/removed those
+      // specific assets — retrying the scrape won't bring them back, so we
+      // accept the partial mirror and move on. Source URLs that 4xx end up
+      // null'd out of scrape_json by the mirror() helper.
       if (result.failed > 0) {
         await recordSyncEvent(env, {
           sku,
           stage: "scrape",
           level: "error",
-          message: `mirror failed for ${result.failed}/${result.attempted} file(s); retrying scrape`,
+          message: `mirror transient failure ${result.failed}/${result.attempted}; retrying scrape`,
           context: result,
         });
-        throw new Error(`mirror failed for ${result.failed}/${result.attempted} file(s)`);
+        throw new Error(`mirror transient failure ${result.failed}/${result.attempted} file(s)`);
+      }
+      if (result.permanent_failed > 0) {
+        await recordSyncEvent(env, {
+          sku,
+          stage: "scrape",
+          level: "warn",
+          message: `${result.permanent_failed}/${result.attempted} source files were rotated by the storefront (4xx); accepted partial mirror`,
+          context: result,
+        });
       }
     }
 
