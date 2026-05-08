@@ -2,9 +2,10 @@ import type { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { ApiError } from "../core";
 import { fetchProductPage, parseProductHtml } from "../scraper/product-page";
-import { mergeScrapeAndErp } from "../sync/merge";
+import { mergeScrapeAndErp, type MergedProduct } from "../sync/merge";
 import { fetchProductFromErp } from "../erp/client";
 import { resolveSku } from "../scraper/sku-resolver";
+import { mirrorProductMedia } from "../sync/media";
 
 /**
  * Inline debug routes — useful for development and one-shot inspection of the
@@ -63,11 +64,21 @@ export function registerDebugRoutes(app: Hono<AppEnv>): void {
       scrape,
       erp: erpData,
     });
+    // If `mirror=1` is set, also run the media stage inline so callers can
+    // verify R2 mirroring without going through the queue.
+    let mediaResult = null;
+    let mergedAfterMirror: MergedProduct | null = null;
+    if (c.req.query("mirror") === "1") {
+      const r = await mirrorProductMedia(c.env, merged);
+      mediaResult = r.result;
+      mergedAfterMirror = r.merged;
+    }
     return c.json({
       input: { url: target, sku_used_for_erp_lookup: skuForLookup },
       scrape,
       erp: erpResult,
-      merged,
+      merged: mergedAfterMirror ?? merged,
+      media_result: mediaResult,
     });
   });
 }

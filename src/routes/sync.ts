@@ -17,7 +17,7 @@ export function registerSyncRoutes(app: Hono<AppEnv>): void {
     if (!product) {
       throw new ApiError(404, `product not found for sku=${sku}`);
     }
-    const stageParam = (c.req.query("stage") as "scrape" | "erp" | "merge" | "push" | undefined) ?? "scrape";
+    const stageParam = (c.req.query("stage") as "scrape" | "erp" | "merge" | "media" | "push" | undefined) ?? "scrape";
     const id = await enqueueStage(c.env, {
       stage: stageParam,
       sku,

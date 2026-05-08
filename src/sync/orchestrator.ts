@@ -12,7 +12,8 @@ import { fetchProductSitemap } from "../scraper/sitemap";
 import { fetchProductPage } from "../scraper/product-page";
 import { resolveSku } from "../scraper/sku-resolver";
 import { fetchProductFromErp } from "../erp/client";
-import { mergeScrapeAndErp } from "./merge";
+import { mergeScrapeAndErp, type MergedProduct } from "./merge";
+import { mirrorProductMedia } from "./media";
 import { upsertWooProduct } from "../woo/client";
 import {
   updateScrapeResult,
@@ -22,7 +23,7 @@ import {
 } from "../db/repo";
 import { safeJsonParse } from "../core";
 
-export const STAGES: SyncQueueMessage["stage"][] = ["rebuild", "scrape", "erp", "merge", "push"];
+export const STAGES: SyncQueueMessage["stage"][] = ["rebuild", "scrape", "erp", "merge", "media", "push"];
 
 export async function enqueueRebuild(env: Env, opts: { reason?: string } = {}): Promise<number> {
   const id = await enqueueSyncRow(env, { stage: "rebuild", payload: opts });
@@ -121,18 +122,39 @@ export async function runMergeStage(env: Env, sku: string): Promise<void> {
   const effectiveSku = product.external_sku ?? sku;
   const merged = mergeScrapeAndErp({ sku: effectiveSku, scrape: scrape as any, erp });
   await updateMergedResult(env, sku, merged);
+  // Always queue the media stage so URLs get mirrored to R2 before any Woo
+  // write. If the bucket isn't bound the stage no-ops gracefully.
+  await enqueueStage(env, { stage: "media", sku });
+}
 
-  // Gate the push stage. By default we mirror everything to the local panel
-  // (D1 + R2 once that lands) and let the user trigger Woo pushes explicitly.
+export async function runMediaStage(env: Env, sku: string): Promise<void> {
+  const product = await getProductBySku(env, sku);
+  if (!product) throw new Error(`product not found for sku=${sku}`);
+  if (!product.merged_json) throw new Error(`merged payload missing for sku=${sku}`);
+  const merged = safeJsonParse<MergedProduct>(product.merged_json);
+  if (!merged) throw new Error(`merged payload invalid JSON for sku=${sku}`);
+
+  const { merged: mirrored, result } = await mirrorProductMedia(env, merged);
+  // Persist the rewritten merged_json back to D1.
+  await updateMergedResult(env, sku, mirrored);
+
+  await recordSyncEvent(env, {
+    sku,
+    stage: "media",
+    level: result.failed > 0 ? "warn" : "info",
+    message: `media: attempted=${result.attempted} mirrored=${result.mirrored} alreadyOurs=${result.alreadyOurs} failed=${result.failed}`,
+    context: result,
+  });
+
   const pushEnabled = String(env.WOO_PUSH_ENABLED ?? "").toLowerCase();
   if (pushEnabled === "1" || pushEnabled === "true" || pushEnabled === "yes") {
     await enqueueStage(env, { stage: "push", sku });
   } else {
     await recordSyncEvent(env, {
       sku,
-      stage: "merge",
+      stage: "media",
       level: "info",
-      message: "merged ok — push skipped (WOO_PUSH_ENABLED is off)",
+      message: "media ok — push skipped (WOO_PUSH_ENABLED is off)",
     });
   }
 }

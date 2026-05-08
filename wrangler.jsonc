@@ -18,6 +18,12 @@
       "database_id": "48a12199-a327-40da-9def-1f1f993cf00b"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "odontojf-products-media"
+    }
+  ],
   "queues": {
     "producers": [
       {
@@ -49,7 +55,8 @@
     "REBUILD_INTERVAL_HOURS": "24",
     "DRAIN_BATCH_SIZE": "20",
     "REQUEST_TIMEOUT_MS": "15000",
-    "LOG_LEVEL": "INFO"
+    "LOG_LEVEL": "INFO",
+    "MEDIA_PUBLIC_BASE_URL": "https://media.odontoapi.wpatomic.com.br"
   },
   "triggers": {
     "crons": ["* * * * *"]

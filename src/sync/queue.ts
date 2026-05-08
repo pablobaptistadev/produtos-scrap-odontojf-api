@@ -12,6 +12,7 @@ import {
   runScrapeStage,
   runErpStage,
   runMergeStage,
+  runMediaStage,
   runPushStage,
 } from "./orchestrator";
 
@@ -55,6 +56,10 @@ async function processOne(env: Env, msg: Message<SyncQueueMessage>): Promise<voi
       case "merge":
         if (!body.sku) throw new Error("merge stage requires sku");
         await runMergeStage(env, body.sku);
+        break;
+      case "media":
+        if (!body.sku) throw new Error("media stage requires sku");
+        await runMediaStage(env, body.sku);
         break;
       case "push":
         if (!body.sku) throw new Error("push stage requires sku");

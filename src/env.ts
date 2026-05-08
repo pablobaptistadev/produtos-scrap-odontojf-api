@@ -1,5 +1,5 @@
 export interface SyncQueueMessage {
-  stage: "rebuild" | "scrape" | "erp" | "merge" | "push";
+  stage: "rebuild" | "scrape" | "erp" | "merge" | "media" | "push";
   sku?: string | null;
   slug?: string | null;
   url?: string | null;
@@ -11,6 +11,13 @@ export interface Env {
   DB: D1Database;
   SYNC_QUEUE: Queue<SyncQueueMessage>;
   SYNC_DLQ: Queue<SyncQueueMessage>;
+  /** R2 bucket for mirroring product images and PDFs. Optional — when absent
+   *  the media stage no-ops with a warning, and downstream still works using
+   *  the original URLs. */
+  MEDIA?: R2Bucket;
+  /** Public base URL for the MEDIA bucket, e.g. "https://media.odontoapi.wpatomic.com.br".
+   *  Required to rewrite mirrored URLs. */
+  MEDIA_PUBLIC_BASE_URL?: string;
 
   SCRAPE_BASE_URL: string;
   SCRAPE_SITEMAP_PATH: string;
