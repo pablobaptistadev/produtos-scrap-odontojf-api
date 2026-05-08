@@ -239,14 +239,14 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
     const typeBadge = '<span class="badge ' + esc(m.type || 'simple') + '">' + esc(m.type || 'simple') + '</span>';
 
     // Identity row: same SKU across loja / ERP / Woo (Woo is set after push).
-    // - Loja: detected_sku captured from /api/product-specific-data (the "Código do produto").
-    // - ERP : the `codigo` field from the Space Informática product response, when available.
-    // - Woo : the woo_product_id assigned after a successful push to /products.
+    //   Loja: detected_sku from /api/product-specific-data (Código do produto).
+    //   ERP : codigo field from the Space Informática product response.
+    //   Woo : woo_product_id assigned after a successful push.
     const lojaSku = m.sku || '—';
     const erpData = p && p.erp && p.erp.data;
     let erpCodigo = null;
     if (erpData && typeof erpData === 'object') {
-      // Space ERP wraps the actual product under `produtos[0]`.
+      // Space ERP wraps the actual product under produtos[0].
       const list = erpData.produtos;
       const node = Array.isArray(list) && list.length > 0 ? list[0] : (erpData.produto || erpData.Produto || erpData);
       if (node && (node.codigo != null || node.Codigo != null || node.code != null)) {
