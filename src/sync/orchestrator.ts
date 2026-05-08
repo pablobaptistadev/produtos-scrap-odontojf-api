@@ -81,12 +81,19 @@ export async function runRebuildStage(env: Env): Promise<void> {
   });
 }
 
+function isFlagOn(value: string | undefined): boolean {
+  const v = String(value ?? "").toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
 export async function runScrapeStage(env: Env, sku: string, url: string): Promise<void> {
   try {
     const scrape = await fetchProductPage(env, url);
     const externalSku = scrape.detected_sku && scrape.detected_sku !== sku ? scrape.detected_sku : null;
     await updateScrapeResult(env, sku, { status: "ok", json: scrape, externalSku });
-    await enqueueStage(env, { stage: "erp", sku, slug: scrape.slug, url: scrape.url });
+    if (isFlagOn(env.AUTO_ENQUEUE_ERP)) {
+      await enqueueStage(env, { stage: "erp", sku, slug: scrape.slug, url: scrape.url });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await updateScrapeResult(env, sku, { status: "failed", error: msg });
@@ -102,8 +109,9 @@ export async function runErpStage(env: Env, sku: string): Promise<void> {
   if (result.status === "skipped") {
     await updateErpResult(env, sku, { status: "skipped", error: result.reason });
     await recordSyncEvent(env, { sku, stage: "erp", level: "warn", message: result.reason });
-    // even when skipped, advance to merge so scrape data still propagates to woo (best effort)
-    await enqueueStage(env, { stage: "merge", sku });
+    if (isFlagOn(env.AUTO_ENQUEUE_MERGE)) {
+      await enqueueStage(env, { stage: "merge", sku });
+    }
     return;
   }
   if (result.status === "failed") {
@@ -111,7 +119,9 @@ export async function runErpStage(env: Env, sku: string): Promise<void> {
     throw new Error(`erp fetch failed: ${result.reason}`);
   }
   await updateErpResult(env, sku, { status: "ok", json: result.data });
-  await enqueueStage(env, { stage: "merge", sku });
+  if (isFlagOn(env.AUTO_ENQUEUE_MERGE)) {
+    await enqueueStage(env, { stage: "merge", sku });
+  }
 }
 
 export async function runMergeStage(env: Env, sku: string): Promise<void> {
@@ -122,9 +132,9 @@ export async function runMergeStage(env: Env, sku: string): Promise<void> {
   const effectiveSku = product.external_sku ?? sku;
   const merged = mergeScrapeAndErp({ sku: effectiveSku, scrape: scrape as any, erp });
   await updateMergedResult(env, sku, merged);
-  // Always queue the media stage so URLs get mirrored to R2 before any Woo
-  // write. If the bucket isn't bound the stage no-ops gracefully.
-  await enqueueStage(env, { stage: "media", sku });
+  if (isFlagOn(env.AUTO_ENQUEUE_MEDIA)) {
+    await enqueueStage(env, { stage: "media", sku });
+  }
 }
 
 export async function runMediaStage(env: Env, sku: string): Promise<void> {
@@ -146,8 +156,7 @@ export async function runMediaStage(env: Env, sku: string): Promise<void> {
     context: result,
   });
 
-  const pushEnabled = String(env.WOO_PUSH_ENABLED ?? "").toLowerCase();
-  if (pushEnabled === "1" || pushEnabled === "true" || pushEnabled === "yes") {
+  if (isFlagOn(env.WOO_PUSH_ENABLED)) {
     await enqueueStage(env, { stage: "push", sku });
   } else {
     await recordSyncEvent(env, {

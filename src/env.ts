@@ -46,6 +46,15 @@ export interface Env {
    *  Otherwise products stop at `merged` until /sync/sku/<sku>?stage=push is
    *  invoked manually. Default: disabled (mirror loja → ERP → painel first). */
   WOO_PUSH_ENABLED?: string;
+
+  /** Stage gates: when "1" / "true", the previous stage automatically
+   *  enqueues the named stage. When false, the previous stage stops and
+   *  the operator must trigger the next batch via /admin/advance.
+   *  Default for all: false — phased rollout (scrape everything first,
+   *  then advance to ERP, then merge, etc.).  */
+  AUTO_ENQUEUE_ERP?: string;
+  AUTO_ENQUEUE_MERGE?: string;
+  AUTO_ENQUEUE_MEDIA?: string;
 }
 
 export type AppEnv = {
