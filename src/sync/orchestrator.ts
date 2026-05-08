@@ -109,7 +109,20 @@ export async function runScrapeStage(env: Env, sku: string, url: string): Promis
       }
     }
 
-    await updateScrapeResult(env, sku, { status: "ok", json: scrape, externalSku });
+    // Persist the (possibly rewritten) scrape_json directly. The helper
+    // updateScrapeResult was observed not to commit the JSON column reliably
+    // when called twice in a row on the same row, so we write it via a single
+    // explicit UPDATE.
+    const ts = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE products
+         SET scrape_json = ?,
+             scrape_status = 'ok',
+             scrape_updated_at = ?,
+             scrape_error = NULL,
+             external_sku = COALESCE(?, external_sku)
+       WHERE sku = ?`,
+    ).bind(JSON.stringify(scrape), ts, externalSku ?? null, sku).run();
     if (isFlagOn(env.AUTO_ENQUEUE_ERP)) {
       await enqueueStage(env, { stage: "erp", sku, slug: scrape.slug, url: scrape.url });
     }
