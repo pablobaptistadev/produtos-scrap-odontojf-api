@@ -17,7 +17,12 @@ export interface Env {
   SCRAPE_USER_AGENT?: string;
 
   ERP_BASE_URL: string;
+  /** Pre-issued token. When set, takes precedence over ERP_LOGIN/ERP_SENHA. */
   ERP_API_TOKEN?: string;
+  /** Login user for POST /autenticacao/entrar (ERP "SPACE" platform). */
+  ERP_LOGIN?: string;
+  /** Login password for POST /autenticacao/entrar. */
+  ERP_SENHA?: string;
 
   WOO_BASE_URL: string;
   WOO_CONSUMER_KEY?: string;
