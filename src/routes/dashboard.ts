@@ -318,12 +318,27 @@ const DASHBOARD_HTML = /* html */ `<!doctype html>
           }
           tr.appendChild(td);
         });
-        tr.addEventListener('click', () => {
+        tr.addEventListener('click', (e) => {
+          // For the products tab, single click selects + shows side detail;
+          // double click (or cmd/ctrl-click) opens the full product preview page.
+          if (state.tab === 'products') {
+            const url = '/dashboard/product/' + encodeURIComponent(item._id) + '?key=' + encodeURIComponent(apiKey);
+            if (e.detail >= 2 || e.metaKey || e.ctrlKey) { window.open(url, '_blank'); return; }
+          }
           state.selected = item._id;
           loadDetail(item);
           document.querySelectorAll('.list tbody tr').forEach(r => r.classList.remove('selected'));
           tr.classList.add('selected');
         });
+        if (state.tab === 'products') {
+          // also add an explicit "abrir" link in the row's last cell so it's discoverable
+          const openTd = document.createElement('td');
+          openTd.style.textAlign = 'right';
+          openTd.style.paddingRight = '14px';
+          openTd.innerHTML = '<a href="/dashboard/product/' + encodeURIComponent(item._id) + '?key=' + encodeURIComponent(apiKey) + '" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none">abrir ↗</a>';
+          openTd.addEventListener('click', (e) => e.stopPropagation());
+          tr.appendChild(openTd);
+        }
         tbody.appendChild(tr);
       });
       body.innerHTML = '';

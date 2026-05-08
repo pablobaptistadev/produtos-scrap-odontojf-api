@@ -114,7 +114,7 @@ export async function updateMergedResult(env: Env, sku: string, merged: unknown)
            merged_updated_at = ?
      WHERE sku = ?`,
   )
-    .bind(JSON.stringify(merged), nowIso())
+    .bind(JSON.stringify(merged), nowIso(), sku)
     .run();
 }
 
