@@ -274,6 +274,25 @@ export async function mirrorScrapedMedia(
   // URLs that returned 4xx — to be also stripped out of description_html.
   const droppedUrls: string[] = [];
 
+  // Enrich pdf_urls with any PDF links found inside description_html. This
+  // is important on backfill: old scrapes captured before the parser learned
+  // about description-embedded PDFs only have what initialData.files said.
+  // Re-running this here lets the mirror pick them up.
+  if (scrape.description_html) {
+    const seen = new Set((scrape.pdf_urls ?? []).map((p) => p.url));
+    const re = /<a\b[^>]*href="([^"]+\.pdf(?:\?[^"]*)?)"[^>]*>([\s\S]*?)<\/a>/gi;
+    for (const m of scrape.description_html.matchAll(re)) {
+      const url = m[1];
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      const label = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "PDF";
+      (scrape.pdf_urls ??= []).push({
+        label: label.length > 80 ? label.slice(0, 80) + "…" : label,
+        url,
+      });
+    }
+  }
+
   /** mirror a single URL and return one of:
    *    "ok"        — replace original with `next`
    *    "drop"      — source is gone (4xx); strip from arrays
