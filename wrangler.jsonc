@@ -42,7 +42,7 @@
         "max_retries": 5,
         "dead_letter_queue": "odontojf-sync-dlq",
         "max_batch_timeout": 10,
-        "max_concurrency": 2
+        "max_concurrency": 10
       }
     ]
   },
@@ -56,7 +56,10 @@
     "DRAIN_BATCH_SIZE": "20",
     "REQUEST_TIMEOUT_MS": "15000",
     "LOG_LEVEL": "INFO",
-    "MEDIA_PUBLIC_BASE_URL": "https://media.odontoapi.wpatomic.com.br"
+    "MEDIA_PUBLIC_BASE_URL": "https://media.odontoapi.wpatomic.com.br",
+    "AUTO_ENQUEUE_ERP": "1",
+    "AUTO_ENQUEUE_MERGE": "1",
+    "ERP_FILIAL_CODIGO": "1"
   },
   "triggers": {
     "crons": ["* * * * *"]

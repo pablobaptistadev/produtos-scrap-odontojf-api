@@ -30,6 +30,8 @@ export interface Env {
   ERP_LOGIN?: string;
   /** Login password for POST /autenticacao/entrar. */
   ERP_SENHA?: string;
+  /** filialCodigo sent on the auth body (matches the storefront plugin). */
+  ERP_FILIAL_CODIGO?: string;
 
   WOO_BASE_URL: string;
   WOO_CONSUMER_KEY?: string;
