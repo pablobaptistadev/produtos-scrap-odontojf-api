@@ -27,6 +27,12 @@ const PRODUCT_HTML = /* html */ `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Don't leak the referrer when loading mirrored images. The R2 custom
+       domain (media.odontoapi.wpatomic.com.br) sits behind the same CF
+       zone as wpatomic.com.br, which has Hotlink Protection on. With a
+       cross-origin Referer the CF edge returns Error 1011 / 403; with
+       no-referrer the request passes. -->
+  <meta name="referrer" content="no-referrer" />
   <title>OdontoJF — Produto</title>
   <style>
     :root {
