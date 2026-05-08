@@ -196,7 +196,11 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
         const scrape = safeJsonParse<ScrapeResult>(row.scrape_json);
         if (!scrape) { failed++; continue; }
         const result = await mirrorScrapedMedia(c.env, scrape, scrape.detected_sku ?? row.sku);
-        await updateScrapeResult(c.env, row.sku, { status: "ok", json: scrape });
+        // Direct UPDATE so the rewritten scrape_json is the only thing we touch
+        // (avoids any overwrite path inside the helper functions).
+        await c.env.DB.prepare(
+          `UPDATE products SET scrape_json = ?, scrape_updated_at = ? WHERE sku = ?`,
+        ).bind(JSON.stringify(scrape), new Date().toISOString(), row.sku).run();
         processed++;
         mirrored += result.result.mirrored;
         failed += result.result.failed;
@@ -213,6 +217,38 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
       files_already_in_r2: alreadyOurs,
       files_failed: failed,
       sku_errors: skuErrors.slice(0, 10),
+    });
+  });
+
+  /** Diagnostic: show scrape_json before+after a mirror for a single SKU. */
+  app.get("/admin/debug-mirror", async (c) => {
+    const sku = c.req.query("sku");
+    if (!sku) throw new ApiError(400, "sku required");
+    const product = await getProductBySku(c.env, sku);
+    if (!product) throw new ApiError(404, "not found");
+    const scrape = safeJsonParse<ScrapeResult>(product.scrape_json ?? "");
+    if (!scrape) throw new ApiError(404, "no scrape data");
+    const beforeImages = JSON.parse(JSON.stringify(scrape.images ?? []));
+    const r = await mirrorScrapedMedia(c.env, scrape, scrape.detected_sku ?? sku);
+    let persistedHasMedia = false;
+    if (c.req.query("save") === "1") {
+      // Direct write — bypass updateScrapeResult to isolate any helper issue.
+      const stringified = JSON.stringify(scrape);
+      await c.env.DB.prepare(
+        `UPDATE products SET scrape_json = ?, scrape_updated_at = ? WHERE sku = ?`,
+      ).bind(stringified, new Date().toISOString(), sku).run();
+      // Read back to confirm.
+      const after = await c.env.DB.prepare(`SELECT scrape_json FROM products WHERE sku = ?`).bind(sku).first<{ scrape_json: string }>();
+      persistedHasMedia = (after?.scrape_json ?? "").includes("media.odontoapi");
+    }
+    return c.json({
+      sku,
+      detected_sku: scrape.detected_sku,
+      result: r.result,
+      before_images: beforeImages,
+      after_images: scrape.images,
+      persisted_has_media: persistedHasMedia,
+      stringified_has_media: JSON.stringify(scrape).includes("media.odontoapi"),
     });
   });
 }
