@@ -381,6 +381,9 @@ export async function mirrorScrapedMedia(
         html = html.replace(new RegExp(`<a[^>]*href="${escapeForRegex(v)}"[^>]*>[\\s\\S]*?</a>`, "gi"), "");
       }
     }
+    // Strip <img src="blob:..."> — these are browser runtime references the
+    // admin tool left behind (never resolvable outside the original session).
+    html = html.replace(/<img\b[^>]*\ssrc="blob:[^"]*"[^>]*\/?>/gi, "");
     scrape.description_html = html;
   }
 
