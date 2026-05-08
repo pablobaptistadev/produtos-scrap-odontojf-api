@@ -91,21 +91,28 @@ export async function runScrapeStage(env: Env, sku: string, url: string): Promis
     const scrape = await fetchProductPage(env, url);
     const externalSku = scrape.detected_sku && scrape.detected_sku !== sku ? scrape.detected_sku : null;
 
-    // Mirror media to R2 INSIDE the scrape stage (default ON when MEDIA is bound).
-    // This way the scrape_json that lands on D1 already points to our domain
-    // and the painel never displays an external URL — even before merge runs.
-    // Set SCRAPE_AUTO_MIRROR=0 to opt out.
-    const autoMirror = env.MEDIA && String(env.SCRAPE_AUTO_MIRROR ?? "1").toLowerCase() !== "0";
-    if (autoMirror) {
+    // Mirror media to R2 INSIDE the scrape stage. Strict policy: if any single
+    // file can't be copied to R2, fail the whole scrape stage so the row stays
+    // out of D1 (with `scrape_status='failed'`) and the queue retries — never
+    // persist external storefront URLs that may be rotated later.
+    // Override with SCRAPE_AUTO_MIRROR=0 only for non-prod debugging.
+    const mirrorOff = String(env.SCRAPE_AUTO_MIRROR ?? "").toLowerCase() === "0";
+    if (!mirrorOff) {
+      if (!env.MEDIA || !env.MEDIA_PUBLIC_BASE_URL) {
+        throw new Error(
+          "media stage required but MEDIA/MEDIA_PUBLIC_BASE_URL not configured — refusing to persist external CDN URLs",
+        );
+      }
       const { result } = await mirrorScrapedMedia(env, scrape, externalSku ?? sku);
       if (result.failed > 0) {
         await recordSyncEvent(env, {
           sku,
           stage: "scrape",
-          level: "warn",
-          message: `media: ${result.mirrored}/${result.attempted} mirrored, ${result.failed} failed`,
+          level: "error",
+          message: `mirror failed for ${result.failed}/${result.attempted} file(s); retrying scrape`,
           context: result,
         });
+        throw new Error(`mirror failed for ${result.failed}/${result.attempted} file(s)`);
       }
     }
 

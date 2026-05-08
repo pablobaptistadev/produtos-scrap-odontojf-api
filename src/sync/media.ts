@@ -134,36 +134,49 @@ async function mirror(
       return `${ctx.publicBase}/${key}`;
     }
 
-    const res = await fetchWithTimeout(url, {
-      timeoutMs: ctx.timeoutMs,
-      headers: { "user-agent": ctx.userAgent },
-    });
-    if (!res.ok) {
-      ctx.warnings.push(`media: ${url} returned HTTP ${res.status}`);
-      ctx.result.failed++;
-      return null;
+    // Try up to 3 times with exponential backoff. The storefront CDN
+    // occasionally returns transient 5xx / connection resets — losing a
+    // single image because of that would mean the user can never recover
+    // the asset later (the original URL might rotate).
+    let lastErr: string | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 200 * attempt * attempt));
+      try {
+        const res = await fetchWithTimeout(url, {
+          timeoutMs: ctx.timeoutMs,
+          headers: { "user-agent": ctx.userAgent },
+        });
+        if (!res.ok) {
+          lastErr = `HTTP ${res.status}`;
+          // 4xx is permanent — don't retry
+          if (res.status >= 400 && res.status < 500) break;
+          continue;
+        }
+        const contentType = res.headers.get("content-type") ?? guessContentType(key);
+        const body = await res.arrayBuffer();
+        if (body.byteLength === 0) {
+          lastErr = "empty body";
+          continue;
+        }
+        await ctx.bucket.put(key, body, {
+          httpMetadata: {
+            contentType,
+            cacheControl: "public, max-age=31536000, immutable",
+          },
+          customMetadata: {
+            sourceUrl: url,
+            mirroredAt: new Date().toISOString(),
+          },
+        });
+        ctx.result.mirrored++;
+        return `${ctx.publicBase}/${key}`;
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : String(err);
+      }
     }
-    const contentType = res.headers.get("content-type") ?? guessContentType(key);
-    const body = await res.arrayBuffer();
-    if (body.byteLength === 0) {
-      ctx.warnings.push(`media: ${url} returned empty body`);
-      ctx.result.failed++;
-      return null;
-    }
-
-    await ctx.bucket.put(key, body, {
-      httpMetadata: {
-        contentType,
-        // 1 year browser cache; R2 holds it forever.
-        cacheControl: "public, max-age=31536000, immutable",
-      },
-      customMetadata: {
-        sourceUrl: url,
-        mirroredAt: new Date().toISOString(),
-      },
-    });
-    ctx.result.mirrored++;
-    return `${ctx.publicBase}/${key}`;
+    ctx.warnings.push(`media: failed to mirror ${url} → ${key}: ${lastErr ?? "unknown"}`);
+    ctx.result.failed++;
+    return null;
   } catch (err) {
     ctx.warnings.push(
       `media: failed to mirror ${url} → ${key}: ${err instanceof Error ? err.message : String(err)}`,
