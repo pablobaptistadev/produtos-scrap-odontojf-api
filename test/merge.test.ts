@@ -312,3 +312,102 @@ describe("mergeScrapeAndErp — sale price", () => {
     expect(merged.sale_price).toBeNull();
   });
 });
+
+describe("mergeScrapeAndErp — offers (de/por)", () => {
+  const offerScrape: any = {
+    ...baseScrape,
+    price: "178.00",
+    price_text: "R$ 178,00",
+    old_price: "187.74",
+    old_price_text: "R$ 187,74",
+    discount: 5,
+    bigger_discount: null,
+  };
+
+  it("erp-ok + offer, ERP below 'de' → regular='de', sale=ERP", () => {
+    const merged = mergeScrapeAndErp({
+      sku: "SKU-O1",
+      scrape: offerScrape,
+      erp: { codigo: "SKU-O1", preco: 170 },
+    });
+    expect(merged.regular_price).toBe("187.74");
+    expect(merged.sale_price).toBe("170.00");
+  });
+
+  it("erp-ok + offer, ERP at/above 'de' (SKU 37 case) → sale dropped", () => {
+    const merged = mergeScrapeAndErp({
+      sku: "SKU-O2",
+      scrape: offerScrape,
+      erp: { codigo: "SKU-O2", preco: 191.8 },
+    });
+    expect(merged.regular_price).toBe("187.74");
+    expect(merged.sale_price).toBeNull();
+    expect(merged.warnings.some((w) => w.includes("sale dropped"))).toBe(true);
+  });
+
+  it("erp_failed + offer → mirrors the origin de/por", () => {
+    const merged = mergeScrapeAndErp({ sku: "SKU-O3", scrape: offerScrape, erp: null });
+    expect(merged.regular_price).toBe("187.74");
+    expect(merged.sale_price).toBe("178.00");
+    expect(merged.meta_data.find((m) => m.key === "_odontojf_old_price_text")?.value).toBe("R$ 187,74");
+    expect(merged.meta_data.find((m) => m.key === "_odontojf_discount")?.value).toBe("5");
+  });
+
+  it("erp_failed, no offer → regular=current price, no sale", () => {
+    const merged = mergeScrapeAndErp({
+      sku: "SKU-O4",
+      scrape: { ...baseScrape, price: "178.00" },
+      erp: null,
+    });
+    expect(merged.regular_price).toBe("178.00");
+    expect(merged.sale_price).toBeNull();
+    expect(merged.meta_data.find((m) => m.key === "_odontojf_old_price_text")).toBeUndefined();
+  });
+
+  it("old_price equal to price (discount 0) is not an offer", () => {
+    const merged = mergeScrapeAndErp({
+      sku: "SKU-O5",
+      scrape: { ...baseScrape, price: "100.00", old_price: "100.00", discount: 0 },
+      erp: null,
+    });
+    expect(merged.regular_price).toBe("100.00");
+    expect(merged.sale_price).toBeNull();
+  });
+
+  it("propagates de/por to variations (parent stays regular = min current)", () => {
+    const offerVariableScrape: any = {
+      ...baseScrape,
+      type: "variable",
+      images: [{ src: "https://cdn.example/parent.jpg", alt: null }],
+      variations: [
+        {
+          id: "v1", sku: "V1", name: "A1",
+          provider_code: null, barcode: null,
+          price: "120.00", price_text: "R$ 120,00",
+          old_price: "149.18", old_price_text: "R$ 149,18", discount: 10, bigger_discount: null,
+          stock_status: "in_stock", stock_qty: 5,
+          dimensions: { weight: null, length: null, width: null, height: null },
+          images: [],
+        },
+        {
+          id: "v2", sku: "V2", name: "B1",
+          provider_code: null, barcode: null,
+          price: "59.99", price_text: "R$ 59,99",
+          old_price: null, old_price_text: null, discount: null, bigger_discount: null,
+          stock_status: "in_stock", stock_qty: 2,
+          dimensions: { weight: null, length: null, width: null, height: null },
+          images: [],
+        },
+      ],
+    };
+    const merged = mergeScrapeAndErp({ sku: "V1", scrape: offerVariableScrape, erp: null });
+    const a1 = merged.variations.find((v) => v.name === "A1")!;
+    expect(a1.regular_price).toBe("149.18");
+    expect(a1.sale_price).toBe("120.00");
+    expect(a1.meta_data.find((m) => m.key === "_odontojf_old_price_text")?.value).toBe("R$ 149,18");
+    // variation without an offer keeps regular = current price, no sale
+    const b1 = merged.variations.find((v) => v.name === "B1")!;
+    expect(b1.regular_price).toBe("59.99");
+    expect(b1.sale_price).toBeNull();
+  });
+});

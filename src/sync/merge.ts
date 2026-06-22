@@ -72,6 +72,8 @@ export interface MergedVariation {
   provider_code: string | null;
   barcode: string | null;
   regular_price: string | null;
+  /** offer price ("por"). Null unless this variation is on offer. */
+  sale_price: string | null;
   manage_stock: boolean;
   stock_quantity: number | null;
   stock_status: "instock" | "outofstock" | null;
@@ -309,13 +311,31 @@ export function mergeScrapeAndErp(input: {
     if (v.provider_code) variationMeta.push({ key: "_odontojf_provider_code", value: v.provider_code });
     if (v.id) variationMeta.push({ key: "_odontojf_scrape_id", value: v.id });
 
+    // Offer ("de/por"): mirror the origin. regular = oldPrice, sale = current price.
+    // ERP has no per-variation price here, so the plugin reconciles each variation
+    // against the live ERP price at cart time (same rule as the parent below).
+    const vCur = v.price != null ? Number(v.price) : null;
+    const vOld = v.old_price != null ? Number(v.old_price) : null;
+    const vDiscount = typeof v.discount === "number" ? v.discount : null;
+    const vHasOffer =
+      (vDiscount != null && vDiscount > 0) ||
+      (vOld != null && vCur != null && vOld > vCur);
+    const vRegularNum = vHasOffer && vOld != null ? vOld : vCur;
+    const vSaleNum =
+      vHasOffer && vCur != null && vRegularNum != null && vCur < vRegularNum ? vCur : null;
+    if (vHasOffer && v.old_price_text)
+      variationMeta.push({ key: "_odontojf_old_price_text", value: v.old_price_text });
+    if (vHasOffer && vDiscount != null && vDiscount > 0)
+      variationMeta.push({ key: "_odontojf_discount", value: String(vDiscount) });
+
     return {
       scrape_id: v.id,
       sku: v.sku,
       name: v.name,
       provider_code: v.provider_code ?? null,
       barcode: v.barcode ?? null,
-      regular_price: v.price,
+      regular_price: vRegularNum != null ? vRegularNum.toFixed(2) : v.price,
+      sale_price: vSaleNum != null ? vSaleNum.toFixed(2) : null,
       manage_stock: v.stock_qty != null,
       stock_quantity: v.stock_qty,
       stock_status:
@@ -368,10 +388,38 @@ export function mergeScrapeAndErp(input: {
   );
   const scrapeStockQty = isVariable ? (variationStockTotal || null) : (scrape?.stock_qty ?? null);
 
-  const regularPriceNum = erpPrice ?? (scrape?.price != null ? Number(scrape.price) : null) ?? null;
-  const regular_price = regularPriceNum != null ? regularPriceNum.toFixed(2)
-    : minVariationPrice;
-  const sale_price = erpSalePrice && erpSalePrice > 0 ? erpSalePrice.toFixed(2) : null;
+  // ---------- offer-aware price (parent / simple) ----------
+  // When the origin has an active offer, mirror its "de/por": regular = origin
+  // oldPrice, sale = the effective current price. The effective price reconciles
+  // against the ERP (the live source of truth): ERP >= regular ⇒ drop the sale;
+  // ERP < regular ⇒ the sale becomes the ERP price. Without an origin offer, ERP
+  // stays the regular price and precoPromocional is the only sale source (legacy).
+  const scrapePriceNum = scrape?.price != null ? Number(scrape.price) : null;
+  const scrapeOldNum = scrape?.old_price != null ? Number(scrape.old_price) : null;
+  const scrapeDiscount = typeof scrape?.discount === "number" ? scrape.discount : null;
+  const parentHasOffer =
+    (scrapeDiscount != null && scrapeDiscount > 0) ||
+    (scrapeOldNum != null && scrapePriceNum != null && scrapeOldNum > scrapePriceNum);
+
+  const regularPriceNum =
+    parentHasOffer && scrapeOldNum != null ? scrapeOldNum : (erpPrice ?? scrapePriceNum);
+  const regular_price =
+    regularPriceNum != null ? regularPriceNum.toFixed(2) : minVariationPrice;
+
+  const effectivePriceNum = erpPrice ?? scrapePriceNum;
+  let saleNum: number | null = null;
+  if (parentHasOffer) {
+    if (effectivePriceNum != null && regularPriceNum != null && effectivePriceNum < regularPriceNum) {
+      saleNum = effectivePriceNum;
+    } else if (effectivePriceNum != null && regularPriceNum != null) {
+      warnings.push(
+        `offer present but effective price ${effectivePriceNum} not below regular ${regularPriceNum}; sale dropped`,
+      );
+    }
+  } else if (erpSalePrice && erpSalePrice > 0 && regularPriceNum != null && erpSalePrice < regularPriceNum) {
+    saleNum = erpSalePrice;
+  }
+  const sale_price = saleNum != null ? saleNum.toFixed(2) : null;
 
   const stockQuantity = erpStockQty ?? scrapeStockQty;
   const stockStatus: "instock" | "outofstock" | null = (() => {
@@ -418,6 +466,8 @@ export function mergeScrapeAndErp(input: {
   const barcode = erpBarcode ?? scrape?.barcode ?? null;
   if (barcode) meta_data.push({ key: "_odontojf_barcode", value: barcode });
   if (scrape?.installments) meta_data.push({ key: "_odontojf_installments", value: scrape.installments });
+  if (parentHasOffer && scrape?.old_price_text) meta_data.push({ key: "_odontojf_old_price_text", value: scrape.old_price_text });
+  if (parentHasOffer && scrapeDiscount != null && scrapeDiscount > 0) meta_data.push({ key: "_odontojf_discount", value: String(scrapeDiscount) });
   for (const v of scrape?.video_urls ?? []) meta_data.push({ key: "_odontojf_video_url", value: v });
   for (const p of scrape?.pdf_urls ?? []) meta_data.push({ key: "_odontojf_pdf_url", value: p.url });
 

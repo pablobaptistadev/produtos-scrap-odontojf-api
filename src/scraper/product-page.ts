@@ -50,6 +50,11 @@ export interface ScrapeVariation {
   provider_code: string | null;
   price: string | null;
   price_text: string | null;
+  /** offer ("de") fields — null unless this variation is on offer at scrape time */
+  old_price: string | null;
+  old_price_text: string | null;
+  discount: number | null;
+  bigger_discount: number | null;
   stock_status: "in_stock" | "out_of_stock" | null;
   stock_qty: number | null;
   barcode: string | null;
@@ -93,6 +98,11 @@ export interface ScrapeResult {
   /** simple-product fields (null on variable products) */
   price: string | null;
   price_text: string | null;
+  /** offer ("de") fields — null unless the product is on offer at scrape time */
+  old_price: string | null;
+  old_price_text: string | null;
+  discount: number | null;
+  bigger_discount: number | null;
   installments: string | null;
   stock_qty: number | null;
   /** variable-product fields (empty on simple products) */
@@ -130,6 +140,12 @@ interface SpecificData {
   internalId?: string | null;
   price?: number | null;
   formattedPrice?: string | null;
+  /** "de" price when the product is on offer (null/absent otherwise) */
+  oldPrice?: number | null;
+  formattedOldPrice?: string | null;
+  /** discount magnitude as returned by the origin (unit not normalised here) */
+  discount?: number | null;
+  biggerDiscount?: number | null;
   units?: number | null;
   available?: boolean;
   options?: unknown[];
@@ -279,6 +295,10 @@ function applyParentSpecific(result: ScrapeResult, sp: SpecificData): void {
   if (result.type === "simple") {
     if (typeof sp.price === "number") result.price = sp.price.toFixed(2);
     if (sp.formattedPrice) result.price_text = decodeHtmlEntities(sp.formattedPrice);
+    if (typeof sp.oldPrice === "number") result.old_price = sp.oldPrice.toFixed(2);
+    if (sp.formattedOldPrice) result.old_price_text = decodeHtmlEntities(sp.formattedOldPrice);
+    if (typeof sp.discount === "number") result.discount = sp.discount;
+    if (typeof sp.biggerDiscount === "number") result.bigger_discount = sp.biggerDiscount;
     if (typeof sp.units === "number") result.stock_qty = sp.units;
     if (sp.available === false) result.stock_status = "out_of_stock";
     else if (sp.available === true) result.stock_status = "in_stock";
@@ -289,6 +309,10 @@ function applyVariationSpecific(variation: ScrapeVariation, sp: SpecificData): v
   if (sp.internalId) variation.sku = sp.internalId;
   if (typeof sp.price === "number") variation.price = sp.price.toFixed(2);
   if (sp.formattedPrice) variation.price_text = decodeHtmlEntities(sp.formattedPrice);
+  if (typeof sp.oldPrice === "number") variation.old_price = sp.oldPrice.toFixed(2);
+  if (sp.formattedOldPrice) variation.old_price_text = decodeHtmlEntities(sp.formattedOldPrice);
+  if (typeof sp.discount === "number") variation.discount = sp.discount;
+  if (typeof sp.biggerDiscount === "number") variation.bigger_discount = sp.biggerDiscount;
   if (typeof sp.units === "number") variation.stock_qty = sp.units;
   if (sp.available === false) {
     variation.stock_status = "out_of_stock";
@@ -344,6 +368,10 @@ function parseFromNextData(
         provider_code: nonEmpty(opt.providerCode) ?? null,
         price: null,
         price_text: null,
+        old_price: null,
+        old_price_text: null,
+        discount: null,
+        bigger_discount: null,
         stock_status: null,
         stock_qty: null,
         barcode: nonEmpty(opt.barcode) ?? null,
@@ -376,6 +404,10 @@ function parseFromNextData(
     dimensions: parentDimensions,
     price: null,
     price_text: null,
+    old_price: null,
+    old_price_text: null,
+    discount: null,
+    bigger_discount: null,
     installments: null,
     stock_qty: null,
     variations,
@@ -423,6 +455,10 @@ function parseFromRenderedDom(
     dimensions: { weight: null, length: null, width: null, height: null },
     price: null,
     price_text: null,
+    old_price: null,
+    old_price_text: null,
+    discount: null,
+    bigger_discount: null,
     installments: null,
     stock_qty: null,
     variations: [],
