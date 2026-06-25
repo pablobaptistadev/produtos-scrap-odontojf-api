@@ -81,10 +81,18 @@ Plugin instalado em `uvmix.wpatomic.com.br`. Expõe REST sob
 | GET | `/ping` | Saúde + versão do plugin de deploy. |
 | GET | `/plugins?managed=1` | Lista plugins (e versões) gerenciados. |
 | GET | `/backups?slug=<slug>` | Lista snapshots de backup de um plugin. |
-| POST | `/deploy` | Instala/atualiza a partir de `zip_url`. Cria backup automático. |
+| POST | `/deploy` | Instala/atualiza a partir de `zip_url` (host externo). Cria backup automático. |
+| POST | `/upload` | **Instala/atualiza enviando o `.zip` direto via multipart** — sem host externo. ⭐ recomendado p/ automação. |
 | POST | `/restore` | Volta para um backup (rollback). |
 
-### 4.3 Fluxo de deploy
+> O `/upload` é fornecido pelo plugin companheiro **`wpatomic-deploy-uploader`**
+> (fonte no repo `pablobaptistadev/checkout-plugin`). Ele registra a rota no
+> **mesmo namespace** e reaproveita o **mesmo `X-Deploy-Token`** (valida
+> despachando o `/ping` do `wpatomic-deploy` em processo). Mesma URL base,
+> mesma chave, sem precisar hospedar o zip em lugar nenhum.
+
+### 4.3 Fluxo de deploy — **upload direto (recomendado)**
+Um único passo, sem host externo. É o caminho ideal para o agente.
 ```bash
 TOKEN="<cole do WP Admin / cofre>"          # nunca commitar
 SITE="https://uvmix.wpatomic.com.br"
@@ -93,25 +101,35 @@ ZIP="meu-plugin-1.0.0.zip"
 # 1) Empacotar (exclua dist/backups/node_modules):
 zip -r -q "$ZIP" meu-plugin -x '*/dist/*' '*/backups/*' '*/node_modules/*'
 
-# 2) Hospedar o zip num host temporário público (o /deploy baixa de uma URL):
-URL=$(curl -s -F reqtype=fileupload -F time=1h \
-      -F fileToUpload=@"$ZIP" \
-      https://litterbox.catbox.moe/resources/internals/api.php)
-echo "$URL"   # ex.: https://litter.catbox.moe/xxxx.zip
+# 2) Subir o zip DIRETO (multipart, campo "file"); ?activate=true ativa após instalar:
+curl -s -X POST "$SITE/wp-json/wpatomic-deploy/v1/upload?activate=true" \
+  -H "X-Deploy-Token: $TOKEN" \
+  -F "file=@$ZIP"
+# -> {"success":true,"plugin":"meu-plugin/meu-plugin.php","slug":"meu-plugin",
+#     "version":"1.0.0","activated":true,"log":[...]}
 
-# 3) Deploy:
-curl -s -X POST "$SITE/wp-json/wpatomic-deploy/v1/deploy" \
-  -H "X-Deploy-Token: $TOKEN" -H "Content-Type: application/json" \
-  -d "{\"zip_url\":\"$URL\",\"activate\":true}"
-# -> {"success":true,"version":"1.0.0","active":true,"backup":"...zip", ...}
-
-# 4) Verificar:
+# 3) Verificar:
 curl -s -H "X-Deploy-Token: $TOKEN" "$SITE/wp-json/wpatomic-deploy/v1/plugins?managed=1"
 
-# 5) Rollback (se quebrar):
+# 4) Rollback (se quebrar):
 curl -s -X POST "$SITE/wp-json/wpatomic-deploy/v1/restore" \
   -H "X-Deploy-Token: $TOKEN" -H "Content-Type: application/json" \
   -d '{"slug":"meu-plugin","activate":true}'   # sem version = backup anterior
+```
+
+> ⚠️ O `/upload` depende de `upload_max_filesize` / `post_max_size` do PHP do site
+> comportarem o `.zip`. Para plugins grandes acima desse limite, caia no `/deploy`
+> por URL (§4.3b).
+
+### 4.3b Alternativa — deploy por URL (`/deploy`)
+Quando o zip é grande demais para o upload do PHP, hospede num host temporário e
+passe a URL:
+```bash
+URL=$(curl -s -F reqtype=fileupload -F time=1h -F fileToUpload=@"$ZIP" \
+      https://litterbox.catbox.moe/resources/internals/api.php)
+curl -s -X POST "$SITE/wp-json/wpatomic-deploy/v1/deploy" \
+  -H "X-Deploy-Token: $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"zip_url\":\"$URL\",\"activate\":true}"
 ```
 
 ### 4.4 Para deployar em OUTRO site
