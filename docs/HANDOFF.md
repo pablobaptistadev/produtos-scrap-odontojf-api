@@ -90,6 +90,14 @@ Plugin instalado em `uvmix.wpatomic.com.br`. Expõe REST sob
 > **mesmo namespace** e reaproveita o **mesmo `X-Deploy-Token`** (valida
 > despachando o `/ping` do `wpatomic-deploy` em processo). Mesma URL base,
 > mesma chave, sem precisar hospedar o zip em lugar nenhum.
+>
+> **Backup automático:** o `/upload` (v1.1.0+) salva o zip em `uploads/` e
+> **delega ao `/deploy` nativo** em processo — então cada upload cria o **mesmo
+> backup versionado** que aparece em "Plugins gerenciados (deploy)" no admin e é
+> restaurável por `/restore`. A resposta traz `"via":"deploy"` e o nome do
+> `"backup"`. Se o site não conseguir baixar a própria URL, ele instala direto
+> e devolve `"via":"direct"` + `"backup_warning"` (sem backup) — sinal pra cair
+> no `/deploy` por URL (§4.3b).
 
 ### 4.3 Fluxo de deploy — **upload direto (recomendado)**
 Um único passo, sem host externo. É o caminho ideal para o agente.
