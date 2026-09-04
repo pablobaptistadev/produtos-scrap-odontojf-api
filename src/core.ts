@@ -77,31 +77,6 @@ export async function fetchWithTimeout(url: string, init: RequestInit & { timeou
   }
 }
 
-/**
- * Run `task` over `items` at most `size` at a time, preserving input order.
- *
- * Workers cap simultaneous outbound connections (6) and total subrequests per
- * invocation, so any per-variation fan-out has to be chunked rather than fired
- * as one big `Promise.all`. Never rejects: a failed task yields `null`, exactly
- * like the `allSettled` style the scraper already relies on.
- */
-export async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  size: number,
-  task: (item: T, index: number) => Promise<R>,
-): Promise<Array<R | null>> {
-  const out: Array<R | null> = new Array(items.length).fill(null);
-  const width = Math.max(1, size);
-  for (let start = 0; start < items.length; start += width) {
-    const slice = items.slice(start, start + width);
-    const settled = await Promise.allSettled(slice.map((item, i) => task(item, start + i)));
-    settled.forEach((r, i) => {
-      out[start + i] = r.status === "fulfilled" ? r.value : null;
-    });
-  }
-  return out;
-}
-
 export function computeRetryDelaySeconds(attempts: number): number {
   // 30s, 60s, 120s, ... doubling each attempt, capped at 3600s (1h).
   const exp = Math.max(attempts - 1, 0);

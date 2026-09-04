@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { fetchWithTimeout, parseIntEnv, mapWithConcurrency } from "../core";
+import { fetchWithTimeout, parseIntEnv } from "../core";
 
 /**
  * Scraper for individual product pages on dentalodontocirurgicajf.com.br.
@@ -279,47 +279,8 @@ export async function enrichWithSpecificData(
     if (firstWithSku) result.detected_sku = firstWithSku.sku;
   }
 
-  await enrichVariationGalleries(env, result, timeoutMs);
-
   result.api_enriched = true;
   return result;
-}
-
-/**
- * The parent page's `options[]` carries a TRUNCATED view of each child: often a
- * single image where the child's own page has the full gallery (measured: 1 vs
- * 4 on the GOLGRAN forceps). So for variations that look truncated we fetch the
- * child's own page and take its `images` instead.
- *
- * Only fires where it can actually pay off (`images.length <= 1`) and runs
- * chunked, because the scrape already spends `1 + N` subrequests before this.
- */
-async function enrichVariationGalleries(env: Env, result: ScrapeResult, timeoutMs: number): Promise<void> {
-  if (result.type !== "variable") return;
-  const base = (env.SCRAPE_BASE_URL ?? "").replace(/\/$/, "");
-  if (!base.startsWith("http")) return;
-
-  const targets = result.variations.filter((v) => v.slug && (v.images?.length ?? 0) <= 1);
-  if (targets.length === 0) return;
-
-  const width = parseIntEnv(env.SCRAPE_CHILD_CONCURRENCY, 6);
-  await mapWithConcurrency(targets, width, async (v) => {
-    const res = await fetchWithTimeout(`${base}/${v.slug}`, {
-      timeoutMs,
-      headers: { "user-agent": env.SCRAPE_USER_AGENT ?? "OdontoJfSync/1.0" },
-    });
-    if (!res.ok) return null;
-    const initial = readInitialData(extractNextData(await res.text()));
-    if (!initial) return null;
-
-    const imgs = mapImages(initial.images ?? []);
-    // Only ever grow the gallery — never trade a good parent-side image for a
-    // worse child-side one.
-    if (imgs.length > (v.images?.length ?? 0)) v.images = imgs;
-    if (!v.description) v.description = nonEmpty(initial.description) ?? null;
-    if (!v.title) v.title = cleanText(decodeHtmlEntities(initial.title ?? "")) ?? null;
-    return null;
-  });
 }
 
 async function fetchSpecificData(

@@ -22,10 +22,6 @@ export interface Env {
   SCRAPE_BASE_URL: string;
   SCRAPE_SITEMAP_PATH: string;
   SCRAPE_USER_AGENT?: string;
-  /** How many child product pages the scraper fetches at once when filling in
-   *  truncated variation galleries. Default 6 (Workers caps simultaneous
-   *  outbound connections at 6). */
-  SCRAPE_CHILD_CONCURRENCY?: string;
 
   ERP_BASE_URL: string;
   /** Pre-issued token. When set, takes precedence over ERP_LOGIN/ERP_SENHA. */
