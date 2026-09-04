@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { fetchWithTimeout, parseIntEnv } from "../core";
+import { fetchWithTimeout, parseIntEnv, mapWithConcurrency } from "../core";
 
 /**
  * Scraper for individual product pages on dentalodontocirurgicajf.com.br.
@@ -46,6 +46,16 @@ export interface ScrapeVariation {
   sku: string | null;
   /** label shown in the variation table (e.g. "A1", "DB-A3,5") */
   name: string;
+  /** the child's own product title (e.g. "Fórceps Adulto N°150"). On the origin
+   *  every variation is a standalone product with its own title — `name` above
+   *  is only the selector label. */
+  title: string | null;
+  /** the child's own description HTML. Distinct per variation on most families
+   *  (a few duplicate the parent's — the merge keeps whatever is here). */
+  description: string | null;
+  /** the child's own slug, which is also its page URL on the origin. Used to
+   *  fetch the full gallery, since the parent's `options[]` is truncated. */
+  slug: string | null;
   /** manufacturer / supplier reference (initialData.options[i].providerCode) */
   provider_code: string | null;
   price: string | null;
@@ -74,6 +84,10 @@ export interface ScrapeResult {
   url: string;
   slug: string;
   type: "simple" | "variable";
+  /** Raw `initialData.type` from the origin: "family" (a variation group),
+   *  "familyProduct" (a CHILD of a group — must never become its own product)
+   *  or "singleProduct". Kept so the pipeline can refuse to ingest children. */
+  origin_type: string | null;
   /** internal site id (e.g. "Bico64qhnV5r5HfprQZf") */
   id: string | null;
   title: string | null;
@@ -265,8 +279,47 @@ export async function enrichWithSpecificData(
     if (firstWithSku) result.detected_sku = firstWithSku.sku;
   }
 
+  await enrichVariationGalleries(env, result, timeoutMs);
+
   result.api_enriched = true;
   return result;
+}
+
+/**
+ * The parent page's `options[]` carries a TRUNCATED view of each child: often a
+ * single image where the child's own page has the full gallery (measured: 1 vs
+ * 4 on the GOLGRAN forceps). So for variations that look truncated we fetch the
+ * child's own page and take its `images` instead.
+ *
+ * Only fires where it can actually pay off (`images.length <= 1`) and runs
+ * chunked, because the scrape already spends `1 + N` subrequests before this.
+ */
+async function enrichVariationGalleries(env: Env, result: ScrapeResult, timeoutMs: number): Promise<void> {
+  if (result.type !== "variable") return;
+  const base = (env.SCRAPE_BASE_URL ?? "").replace(/\/$/, "");
+  if (!base.startsWith("http")) return;
+
+  const targets = result.variations.filter((v) => v.slug && (v.images?.length ?? 0) <= 1);
+  if (targets.length === 0) return;
+
+  const width = parseIntEnv(env.SCRAPE_CHILD_CONCURRENCY, 6);
+  await mapWithConcurrency(targets, width, async (v) => {
+    const res = await fetchWithTimeout(`${base}/${v.slug}`, {
+      timeoutMs,
+      headers: { "user-agent": env.SCRAPE_USER_AGENT ?? "OdontoJfSync/1.0" },
+    });
+    if (!res.ok) return null;
+    const initial = readInitialData(extractNextData(await res.text()));
+    if (!initial) return null;
+
+    const imgs = mapImages(initial.images ?? []);
+    // Only ever grow the gallery — never trade a good parent-side image for a
+    // worse child-side one.
+    if (imgs.length > (v.images?.length ?? 0)) v.images = imgs;
+    if (!v.description) v.description = nonEmpty(initial.description) ?? null;
+    if (!v.title) v.title = cleanText(decodeHtmlEntities(initial.title ?? "")) ?? null;
+    return null;
+  });
 }
 
 async function fetchSpecificData(
@@ -365,6 +418,9 @@ function parseFromNextData(
         id: opt.id,
         sku: null,
         name: decodeHtmlEntities(opt.titleInFamily ?? opt.title ?? "").trim(),
+        title: cleanText(decodeHtmlEntities(opt.title ?? "")) ?? null,
+        description: nonEmpty(opt.description) ?? null,
+        slug: nonEmpty(opt.slug) ?? null,
         provider_code: nonEmpty(opt.providerCode) ?? null,
         price: null,
         price_text: null,
@@ -387,6 +443,7 @@ function parseFromNextData(
     url,
     slug,
     type: isVariable ? "variable" : "simple",
+    origin_type: nonEmpty(initial.type) ?? null,
     id: initial.id ?? null,
     title: cleanText(decodeHtmlEntities(initial.title ?? "")) ?? null,
     brand: cleanText(decodeHtmlEntities(initial.brand ?? "")) ?? null,
@@ -438,6 +495,7 @@ function parseFromRenderedDom(
     url,
     slug,
     type: "simple",
+    origin_type: null,
     id: null,
     title: cleanText(titleMeta),
     brand: cleanText(readMeta(meta, "product:brand") ?? readMeta(meta, "og:brand")),

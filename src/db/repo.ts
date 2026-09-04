@@ -65,7 +65,7 @@ export async function upsertProductFromSitemap(
 export async function updateScrapeResult(
   env: Env,
   sku: string,
-  result: { status: "ok" | "failed"; json?: unknown; error?: string; externalSku?: string | null },
+  result: { status: "ok" | "failed" | "skipped"; json?: unknown; error?: string; externalSku?: string | null },
 ): Promise<void> {
   const ts = nowIso();
   await env.DB.prepare(

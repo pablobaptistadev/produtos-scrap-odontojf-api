@@ -85,12 +85,25 @@ export async function mirrorProductMedia(
     if (next) merged.images[i] = { src: next };
   }
 
-  // Per-variation images (use scrape_id as namespace so re-mirroring stays stable)
+  // Per-variation gallery (use scrape_id as namespace so re-mirroring stays
+  // stable). These usually arrive already on R2 — the scrape stage mirrors
+  // every variation image before this runs — in which case mirror() no-ops.
   for (const v of merged.variations) {
-    if (!v.image) continue;
-    const key = buildKey(sku, `variations/${v.scrape_id}`, 0, v.image.src);
-    const next = await mirror(ctx, v.image.src, key);
-    if (next) v.image = { src: next };
+    for (let i = 0; i < (v.images?.length ?? 0); i++) {
+      const img = v.images[i];
+      if (!img?.src) continue;
+      const key = buildKey(sku, `variations/${v.scrape_id}`, i, img.src);
+      const next = await mirror(ctx, img.src, key);
+      if (next) v.images[i] = { src: next };
+    }
+    // Keep the thumbnail pointing at the first gallery entry.
+    if (v.images?.length) {
+      v.image = { src: v.images[0].src };
+    } else if (v.image) {
+      const key = buildKey(sku, `variations/${v.scrape_id}`, 0, v.image.src);
+      const next = await mirror(ctx, v.image.src, key);
+      if (next) v.image = { src: next };
+    }
   }
 
   // PDFs

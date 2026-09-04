@@ -123,6 +123,13 @@ export function buildPluginPayload(
       if (v.weight != null && v.weight !== "") vb.weight = String(v.weight);
       if (v.dimensions && typeof v.dimensions === "object") vb.dimensions = v.dimensions;
       if (v.image && typeof v.image === "object" && v.image.src) vb.image = v.image;
+      // Faithful-variation fields (bridge >= 1.0.36). Older bridges simply
+      // ignore keys they don't read, so sending them is safe either way.
+      if (v.title) vb.name = String(v.title);
+      if (v.description != null && v.description !== "") vb.description = String(v.description);
+      if (Array.isArray(v.images) && v.images.length) {
+        vb.images = v.images.filter((i: any) => i?.src).map((i: any) => ({ src: i.src }));
+      }
       if (Array.isArray(v.attributes)) vb.attributes = v.attributes;
       if (Array.isArray(v.meta_data)) vb.meta_data = v.meta_data;
       return vb;

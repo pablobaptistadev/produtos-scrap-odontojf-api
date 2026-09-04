@@ -92,6 +92,29 @@ function isFlagOn(value: string | undefined): boolean {
 export async function runScrapeStage(env: Env, sku: string, url: string): Promise<void> {
   try {
     const scrape = await fetchProductPage(env, url);
+
+    // Anti-duplication guard. On the origin every variation is ALSO a
+    // standalone page (`type: "familyProduct"`), and its code is the same one
+    // that already lives on a variation of the family parent here. Ingesting
+    // one would create a simple product whose SKU collides with that variation
+    // — WooCommerce enforces SKU uniqueness across products AND variations.
+    //
+    // Today the sitemap only publishes "family" and "singleProduct", so this
+    // never fires; it exists so a sitemap change or a manual
+    // POST /admin/import-urls cannot silently corrupt the catalogue.
+    if (scrape.origin_type === "familyProduct") {
+      const reason = `skipped: origin type is familyProduct (a variation of another product, code=${scrape.detected_sku ?? "?"}) — it must not become a standalone product`;
+      await updateScrapeResult(env, sku, { status: "skipped", error: reason });
+      await recordSyncEvent(env, {
+        sku,
+        stage: "scrape",
+        level: "warn",
+        message: reason,
+        context: { url, detected_sku: scrape.detected_sku },
+      });
+      return;
+    }
+
     const externalSku = scrape.detected_sku && scrape.detected_sku !== sku ? scrape.detected_sku : null;
 
     // Mirror media to R2 INSIDE the scrape stage. Strict policy: if any single

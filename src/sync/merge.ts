@@ -69,6 +69,13 @@ export interface MergedVariation {
   sku: string | null;
   /** Variation label as shown on the storefront (e.g. "A1", "DB-A3,5"). */
   name: string;
+  /** The child's own product title on the origin (e.g. "Fórceps Adulto N°150").
+   *  WooCommerce has no native per-variation title, so the bridge stores this
+   *  as meta and the storefront renders it. */
+  title: string | null;
+  /** The child's own description. Written to the variation's NATIVE
+   *  WooCommerce description field by the bridge. */
+  description: string | null;
   provider_code: string | null;
   barcode: string | null;
   regular_price: string | null;
@@ -81,8 +88,12 @@ export interface MergedVariation {
   weight: string | null;
   /** Woo native: { length, width, height } in cm, all strings. */
   dimensions: { length: string; width: string; height: string };
-  /** Single image for the variation. Empty `src` means "use parent image". */
+  /** Single image for the variation — kept as the variation thumbnail and for
+   *  backwards compatibility with consumers that only understand one image. */
   image: { src: string } | null;
+  /** Full per-variation gallery, in origin order. `image` above is images[0].
+   *  Empty when the origin gave this variation no image of its own. */
+  images: Array<{ src: string }>;
   /** Variation attributes — only the variation axis (e.g. {Variação: "A1"}). */
   attributes: Array<{ name: string; option: string }>;
   meta_data: Array<{ key: string; value: string }>;
@@ -305,11 +316,16 @@ export function mergeScrapeAndErp(input: {
       width: fbDim(vDims.width, parentDimsRaw.width),
       height: fbDim(vDims.height, parentDimsRaw.height),
     };
+    // Keep the whole gallery. `image` stays the first one so nothing that only
+    // understands a single image regresses.
+    const gallery = (v.images ?? []).filter((i) => i?.src).map((i) => ({ src: i.src }));
     const image = pickFirstImage(v.images, parentImages);
     const variationMeta: Array<{ key: string; value: string }> = [];
     if (v.barcode) variationMeta.push({ key: "_odontojf_barcode", value: v.barcode });
     if (v.provider_code) variationMeta.push({ key: "_odontojf_provider_code", value: v.provider_code });
     if (v.id) variationMeta.push({ key: "_odontojf_scrape_id", value: v.id });
+    if (v.title) variationMeta.push({ key: "_odontojf_variation_title", value: v.title });
+    if (v.slug) variationMeta.push({ key: "_odontojf_variation_slug", value: v.slug });
 
     // Offer ("de/por"): mirror the origin. regular = oldPrice, sale = current price.
     // ERP has no per-variation price here, so the plugin reconciles each variation
@@ -351,6 +367,9 @@ export function mergeScrapeAndErp(input: {
         height: dimToStr(dims.height) ?? "",
       },
       image,
+      images: gallery,
+      title: v.title ?? null,
+      description: v.description ?? null,
       attributes: [{ name: variationAxisName, option: v.name }],
       meta_data: variationMeta,
     };
