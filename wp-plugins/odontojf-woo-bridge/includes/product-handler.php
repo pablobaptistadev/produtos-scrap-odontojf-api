@@ -191,6 +191,42 @@ function ojf_free_sku_global($sku, $keep_id = 0) {
     }
 }
 
+/**
+ * Dono do SKU quando ele está numa VARIAÇÃO viva (>= 1.0.36).
+ *
+ * Na origem cada tamanho é um produto próprio (`type: familyProduct`) cujo
+ * código já vive numa variação do pai aqui. Se um desses filhos entrar no
+ * pipeline como produto solto, ojf_free_sku_global() re-sufixaria a variação
+ * legítima (411 -> 411-v786729) e o código sumiria da loja. Este lookup existe
+ * para RECUSAR esse create em vez de roubar o SKU.
+ *
+ * @param string $sku
+ * @return array{variation_id:int,parent_id:int,parent_sku:string}|null
+ */
+function ojf_variation_owner_of_sku($sku) {
+    $sku = (string) $sku;
+    if ($sku === '') return null;
+    global $wpdb;
+    $row = $wpdb->get_row($wpdb->prepare(
+        "SELECT p.ID, p.post_parent FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_sku'
+         WHERE m.meta_value = %s AND p.post_type = 'product_variation'
+         ORDER BY p.ID ASC LIMIT 1", $sku
+    ));
+    if (!$row || !(int) $row->post_parent) return null;
+
+    $parent_id = (int) $row->post_parent;
+    // Pai na lixeira / rascunho é lixo de tentativa anterior: deixa o
+    // ojf_free_sku_global() limpar como sempre fez.
+    if (get_post_status($parent_id) !== 'publish') return null;
+
+    return [
+        'variation_id' => (int) $row->ID,
+        'parent_id'    => $parent_id,
+        'parent_sku'   => (string) get_post_meta($parent_id, '_sku', true),
+    ];
+}
+
 /** Compat com o interceptor da api-queue (update/delete): acha por _sku (ERP),
  *  ignorando o conceito de seller (single-tenant). */
 function ojf_buscar_produto_por_sku($sku, $seller = null) {
@@ -198,6 +234,17 @@ function ojf_buscar_produto_por_sku($sku, $seller = null) {
 }
 
 /** Todos os IDs de anexo de um produto: featured + galeria + imagens das variações. */
+/**
+ * IDs dos anexos da galeria por variação (_odontojf_variation_gallery).
+ * Guardado como CSV de IDs; a thumbnail (image_id) NÃO entra aqui.
+ */
+function ojf_get_variation_gallery_ids($variation_id) {
+    $raw = get_post_meta((int) $variation_id, '_odontojf_variation_gallery', true);
+    if (!$raw) return [];
+    $ids = array_map('intval', array_filter(array_map('trim', explode(',', (string) $raw))));
+    return array_values(array_filter($ids));
+}
+
 function ojf_collect_product_attachment_ids($product) {
     if (!$product instanceof WC_Product) return [];
     $ids = [];
@@ -207,6 +254,10 @@ function ojf_collect_product_attachment_ids($product) {
         foreach ($product->get_children() as $cid) {
             $c = wc_get_product($cid);
             if ($c && $c->get_image_id()) $ids[] = (int) $c->get_image_id();
+            // PILAR B: a galeria da variação também está "em uso". Sem esta
+            // linha a varredura de órfãos apagaria os anexos extras no próximo
+            // update — e o hook delete_attachment levaria o objeto no R2 junto.
+            foreach (ojf_get_variation_gallery_ids($cid) as $g) $ids[] = (int) $g;
         }
     }
     return array_values(array_unique(array_filter($ids)));
@@ -463,6 +514,12 @@ function ojf_sync_variations($parent_id, $variations) {
             $variation->set_manage_stock(true);
             $variation->set_stock_quantity((int) $var['stock_quantity']);
         }
+        // Título e descrição próprios da variação (>= 1.0.36). Na origem cada
+        // variação é um produto com página, título e descrição próprios — o
+        // `name` do payload é o título completo ("Fórceps Adulto N°150"), não
+        // o rótulo do seletor (esse vem em attributes[].option).
+        if (!empty($var['name'])) $variation->set_name((string) $var['name']);
+        if (isset($var['description'])) $variation->set_description((string) $var['description']);
         if (!empty($var['weight'])) $variation->set_weight((string) $var['weight']);
         if (!empty($var['dimensions']) && is_array($var['dimensions'])) {
             $d = $var['dimensions'];
@@ -487,11 +544,43 @@ function ojf_sync_variations($parent_id, $variations) {
             }
         }
         $vid = $variation->save();
-        // variation image (async via queue)
-        if (!empty($var['image']['src'])) {
-            $aid = ojf_upload_image($var['image']['src'], $parent_id);
-            if ($aid) { $variation->set_image_id($aid); $variation->save(); }
+
+        // Galeria da variação (>= 1.0.36). Aceita `images[]` (origem completa) e
+        // mantém `image` (singular) para compatibilidade. A 1ª vira a thumbnail
+        // nativa; as demais ficam em _odontojf_variation_gallery.
+        //
+        // ATENÇÃO: qualquer anexo gravado aqui PRECISA ser visível para
+        // ojf_collect_product_attachment_ids(), senão o PILAR B apaga tudo no
+        // próximo update (e o hook delete_attachment leva junto o objeto no R2).
+        $gallery_srcs = [];
+        if (!empty($var['images']) && is_array($var['images'])) {
+            foreach ($var['images'] as $img) {
+                $src = is_array($img) ? ($img['src'] ?? '') : (string) $img;
+                if ($src !== '') $gallery_srcs[] = $src;
+            }
         }
+        if (empty($gallery_srcs) && !empty($var['image']['src'])) {
+            $gallery_srcs[] = (string) $var['image']['src'];
+        }
+
+        if ($gallery_srcs) {
+            $aids = [];
+            foreach ($gallery_srcs as $src) {
+                $aid = ojf_upload_image($src, $parent_id);
+                if ($aid) $aids[] = (int) $aid;
+            }
+            if ($aids) {
+                $variation->set_image_id($aids[0]);
+                $rest = array_slice($aids, 1);
+                if ($rest) {
+                    $variation->update_meta_data('_odontojf_variation_gallery', implode(',', $rest));
+                } else {
+                    $variation->delete_meta_data('_odontojf_variation_gallery');
+                }
+                $variation->save();
+            }
+        }
+
         if ($vid) { $n++; $desired_skus[] = $vsku; }
     }
 
@@ -533,6 +622,16 @@ function ojf_create_product_handler($request) {
             $product = $is_variable ? new WC_Product_Variable($existing) : wc_get_product($existing);
             if (!$product) $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
         } else {
+            // Guarda anti-duplicação (>= 1.0.36): se o SKU já é de uma variação
+            // de um produto PUBLICADO, este payload é um `familyProduct` da
+            // origem (a variação virando produto solto). Recusa em vez de deixar
+            // o ojf_free_sku_global() re-sufixar a variação legítima.
+            if (!$is_variable && ($owner = ojf_variation_owner_of_sku($sku))) {
+                return new WP_Error('sku_belongs_to_variation', sprintf(
+                    'SKU %s já é da variação #%d do produto #%d (%s). Recusado: criar um produto solto com este SKU renomearia a variação e sumiria com o código da loja.',
+                    $sku, $owner['variation_id'], $owner['parent_id'], $owner['parent_sku'] !== '' ? $owner['parent_sku'] : 's/ sku'
+                ), ['status' => 409]);
+            }
             $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
             // Libera o SKU de variações órfãs antes do pai reivindicar (evita
             // "SKU inválido ou duplicado" quando uma variação cru segurava o código).

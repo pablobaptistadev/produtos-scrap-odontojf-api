@@ -2,13 +2,20 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.35
+ * Version: 1.0.36
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.36 - Variacoes fieis a origem: aceita name/description por variacao
+ *          (set_name/set_description) e variations[].images[] (galeria). A 1a
+ *          imagem vira a thumbnail nativa e as demais vao para o meta
+ *          _odontojf_variation_gallery, renderizado no front ao selecionar a
+ *          variacao e editavel na aba Variacoes. ojf_collect_product_attachment_ids()
+ *          passou a enxergar esses anexos (PILAR B) — sem isso a varredura de
+ *          orfaos apagaria a galeria e os objetos no R2 no update seguinte.
  *  1.0.35 - Endpoint /update-price (SINCRONO, fora da api-queue): atualiza SO
  *          preco/estoque (regular_price/sale_price [+ stock_quantity]) do produto
  *          e/ou de cada variacao (casada por _sku ou _ojf_erp_code). NAO mexe em
@@ -122,7 +129,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.35');
+define('OJF_BRIDGE_VERSION', '1.0.36');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
@@ -140,6 +147,7 @@ require_once OJF_BRIDGE_DIR . 'includes/video.php';          // shortcode [ojf_v
 require_once OJF_BRIDGE_DIR . 'includes/api-queue.php';       // interceptor + fila API + worker + dashboard (verbatim)
 require_once OJF_BRIDGE_DIR . 'includes/image-dashboard.php'; // dashboard da fila de imagens (verbatim)
 require_once OJF_BRIDGE_DIR . 'includes/media-r2.php';        // mídia R2: auto-upload + migrar (núcleo, religado ao ojf_r2_*)
+require_once OJF_BRIDGE_DIR . 'includes/variation-gallery.php'; // galeria por variação (front + admin) — _odontojf_variation_gallery
 if (is_admin()) {
     require_once OJF_BRIDGE_DIR . 'includes/settings.php';    // página ÚNICA de configurações (todas as chaves)
     require_once OJF_BRIDGE_DIR . 'includes/media-r2-admin.php'; // biblioteca: coluna/filtro/grid + upload /assets/ (cinza)

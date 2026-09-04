@@ -1,4 +1,4 @@
-# OdontoJF Woo Bridge — v1.0.0
+# OdontoJF Woo Bridge — v1.0.36
 
 Plugin WordPress que recebe os produtos do Worker OdontoJF numa **fila própria** (com
 timing/retry), cria/atualiza no WooCommerce com **atributos manuais** (não globais),
@@ -74,7 +74,14 @@ Auth: `Authorization: Bearer <segredo>`.
   "attributes": [{"name":"Marca","options":["SS WHITE"],"visible":true,"variation":false}],
   "images": [{"src":"https://media.odontoapi.../0-a.jpg"}],
   "meta_data": [{"key":"_odontojf_sku","value":"230"}],
-  "variations": [{"sku":"101","regular_price":"50.00","attributes":[{"name":"Variação","option":"A1"}]}],
+  "variations": [{
+    "sku": "411", "regular_price": "50.00",
+    "name": "Fórceps Adulto N°150",                       // título próprio do filho (>= 1.0.36)
+    "description": "<p>…</p>",                            // descrição própria do filho (>= 1.0.36)
+    "image": {"src": "…/0-a.jpg"},                        // compat: 1 imagem
+    "images": [{"src": "…/0-a.jpg"}, {"src": "…/1-b.jpg"}], // galeria (>= 1.0.36)
+    "attributes": [{"name": "Variação", "option": "N°150"}]
+  }],
   "idem_key": "<sha1>"
 }
 ```
@@ -87,6 +94,51 @@ Auth: `Authorization: Bearer <segredo>`.
 
 - **API Queue**: contagem por status, tempo médio (`duration_ms`), 30 últimos, "Retry failed".
 - **Image Queue**: status, formato/dim/tamanho WebP, link CDN, "Retry failed".
+
+## Variações fiéis à origem (1.0.36)
+
+Na origem cada tamanho/modelo é um **produto próprio** (página, título, descrição e
+galeria) agrupado por um pai sem código. O WooCommerce guarda isso como variação, que
+nativamente só tem **uma** imagem e nenhum título/descrição próprios. A 1.0.36 fecha essa
+lacuna sem sair do CRUD nativo (`WC_Product_Variation`), então **re-push atualiza no
+lugar — nada é apagado nem recadastrado, e nenhum SKU muda**.
+
+| campo do payload | onde vai parar |
+|---|---|
+| `variations[].name` | `set_name()` — título da variação no admin e no carrinho |
+| `variations[].description` | `set_description()` — descrição exibida ao selecionar |
+| `variations[].images[]` | 1ª → `set_image_id()`; demais → meta `_odontojf_variation_gallery` (CSV de attachment IDs) |
+
+`includes/variation-gallery.php` faz as duas pontas:
+
+- **Front** — o filtro `woocommerce_available_variation` injeta `ojf_gallery_html`
+  (gerado por `wc_get_gallery_image_html()`, a mesma função do core, para o markup sair
+  igual ao do tema) e um JS inline troca a galeria do produto em `found_variation`,
+  restaurando a original em `reset_data`. Se `$.fn.wc_product_gallery` não existir, o JS
+  não mexe em nada e vale o comportamento nativo.
+- **Admin** — campo "Galeria da variação" na aba Variações (media modal do WP), salvo em
+  `woocommerce_save_product_variation`. A curadoria manual vale **até o próximo sync do
+  SKU**: a origem é a fonte da verdade e o worker sobrescreve o meta.
+
+> ⚠️ **PILAR B.** `ojf_collect_product_attachment_ids()` define o que "está em uso"; todo
+> anexo com `_ojf_r2_object_key` fora dessa lista é deletado no update seguinte, e o hook
+> `delete_attachment` leva o objeto no R2 junto. Por isso a 1.0.36 também estendeu essa
+> função com `ojf_get_variation_gallery_ids()`. Qualquer meta novo que aponte para anexos
+> precisa entrar lá **antes** de ser gravado.
+
+Por que meta próprio e não a *Attributes Gallery* do CommerceKit: ela trabalha sobre
+atributos **globais** (`pa_*`) e o Bridge cria atributos **manuais** (`set_id(0)`).
+
+## Empacotamento
+
+```bash
+scripts/build-plugin.sh      # gera odontojf-woo-bridge.zip na raiz do repo
+```
+
+O **fonte** em `wp-plugins/odontojf-woo-bridge/` é o histórico; o zip da raiz é sempre
+gerado pelo script, nunca editado à mão. Deploy pelo WP Atomic Deploy:
+`POST /wp-json/wpatomic-deploy/v1/upload?activate=true` (multipart, campo `file`, header
+`X-Deploy-Token`). Rollback: `POST /restore` com `{"slug":"odontojf-woo-bridge"}`.
 
 ## Versionamento
 
