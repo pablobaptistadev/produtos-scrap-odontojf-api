@@ -483,6 +483,8 @@ function ojf_sync_variations($parent_id, $variations) {
     $parent_sku = $parent ? (string) $parent->get_sku() : '';
     $n = 0;
     $desired_skus = []; // PILAR C: _sku finais das variações que devem existir
+    $ck_map    = [];    // CommerceKit: [ sanitize_title(valor) => "ids csv" ]
+    $axis_slugs = [];   // todos os valores do eixo vistos neste push
     foreach ($variations as $var) {
         $erp_code = (string) ($var['sku'] ?? '');   // código ERP real da variação
         if ($erp_code === '') continue;
@@ -570,6 +572,14 @@ function ojf_sync_variations($parent_id, $variations) {
                 if ($aid) $aids[] = (int) $aid;
             }
             if ($aids) {
+                // CommerceKit renderiza a galeria da PDP nesta loja e lê o meta
+                // commercekit_image_gallery do PAI, indexado pelo valor da
+                // variação. Só faz sentido com UM atributo (chave de 1 segmento).
+                if (!empty($var['attributes']) && count($var['attributes']) === 1
+                    && !empty($var['attributes'][0]['option'])) {
+                    $ck_slug = sanitize_title((string) $var['attributes'][0]['option']);
+                    if ($ck_slug !== '') $ck_map[$ck_slug] = implode(',', $aids);
+                }
                 $variation->set_image_id($aids[0]);
                 $rest = array_slice($aids, 1);
                 if ($rest) {
@@ -581,7 +591,17 @@ function ojf_sync_variations($parent_id, $variations) {
             }
         }
 
+        if (!empty($var['attributes']) && count($var['attributes']) === 1
+            && !empty($var['attributes'][0]['option'])) {
+            $as = sanitize_title((string) $var['attributes'][0]['option']);
+            if ($as !== '') $axis_slugs[] = $as;
+        }
+
         if ($vid) { $n++; $desired_skus[] = $vsku; }
+    }
+
+    if (function_exists('ojf_sync_commercekit_gallery')) {
+        ojf_sync_commercekit_gallery($parent_id, $ck_map, array_values(array_unique($axis_slugs)));
     }
 
     // PILAR C (anti-órfão): remove variações que NÃO existem mais no payload.

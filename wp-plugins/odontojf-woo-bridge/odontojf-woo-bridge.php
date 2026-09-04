@@ -12,8 +12,10 @@
  *  1.0.36 - Variacoes fieis a origem: aceita name/description por variacao
  *          (set_name/set_description) e variations[].images[] (galeria). A 1a
  *          imagem vira a thumbnail nativa e as demais vao para o meta
- *          _odontojf_variation_gallery, renderizado no front ao selecionar a
- *          variacao e editavel na aba Variacoes. ojf_collect_product_attachment_ids()
+ *          _odontojf_variation_gallery e espelhado em commercekit_image_gallery
+ *          (o CommerceKit e quem desenha a galeria da PDP; a Attributes Gallery
+ *          dele ja funciona com nosso atributo MANUAL). Editavel na aba
+ *          Variacoes. ojf_collect_product_attachment_ids()
  *          passou a enxergar esses anexos (PILAR B) — sem isso a varredura de
  *          orfaos apagaria a galeria e os objetos no R2 no update seguinte.
  *  1.0.35 - Endpoint /update-price (SINCRONO, fora da api-queue): atualiza SO

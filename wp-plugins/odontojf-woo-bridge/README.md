@@ -109,13 +109,23 @@ lugar — nada é apagado nem recadastrado, e nenhum SKU muda**.
 | `variations[].description` | `set_description()` — descrição exibida ao selecionar |
 | `variations[].images[]` | 1ª → `set_image_id()`; demais → meta `_odontojf_variation_gallery` (CSV de attachment IDs) |
 
-`includes/variation-gallery.php` faz as duas pontas:
+`includes/variation-gallery.php` faz as três pontas:
 
-- **Front** — o filtro `woocommerce_available_variation` injeta `ojf_gallery_html`
-  (gerado por `wc_get_gallery_image_html()`, a mesma função do core, para o markup sair
-  igual ao do tema) e um JS inline troca a galeria do produto em `found_variation`,
-  restaurando a original em `reset_data`. Se `$.fn.wc_product_gallery` não existir, o JS
-  não mexe em nada e vale o comportamento nativo.
+- **CommerceKit (é quem desenha a galeria nesta loja)** — o markup nativo do WooCommerce
+  fica estacionado dentro de `<template class="wc-product-gallery-default-template">`; a
+  galeria visível é o swiper `#commercegurus-pdp-gallery`. O módulo *Attributes Gallery*
+  do CommerceKit já está ligado e **funciona com atributos manuais** — na loja
+  `cgkit_attr_names` é `["attribute_variacao"]`. Ele lê o post meta
+  `commercekit_image_gallery` do **produto pai**, um array
+  `[ sanitize_title(<valor da variação>) => "id1,id2,id3" ]`. O Bridge espelha a galeria
+  nesse meta, então a troca ao escolher a variação sai com swiper, thumbs e lightbox
+  nativos, **sem JS nosso e sem acoplar ao tema**. `default_gallery`, `global_gallery` e
+  galerias curadas à mão fora do eixo de variação são preservadas.
+- **Front (fallback)** — sem o CommerceKit, o filtro `woocommerce_available_variation`
+  injeta `ojf_gallery_html` (gerado por `wc_get_gallery_image_html()`, a mesma função do
+  core) e um JS inline troca a galeria em `found_variation`, restaurando a original em
+  `reset_data`. Nesta loja ele se auto-desliga: `.woocommerce-product-gallery` não existe
+  no DOM (está dentro do `<template>`).
 - **Admin** — campo "Galeria da variação" na aba Variações (media modal do WP), salvo em
   `woocommerce_save_product_variation`. A curadoria manual vale **até o próximo sync do
   SKU**: a origem é a fonte da verdade e o worker sobrescreve o meta.
@@ -126,8 +136,9 @@ lugar — nada é apagado nem recadastrado, e nenhum SKU muda**.
 > função com `ojf_get_variation_gallery_ids()`. Qualquer meta novo que aponte para anexos
 > precisa entrar lá **antes** de ser gravado.
 
-Por que meta próprio e não a *Attributes Gallery* do CommerceKit: ela trabalha sobre
-atributos **globais** (`pa_*`) e o Bridge cria atributos **manuais** (`set_id(0)`).
+O meta próprio (`_odontojf_variation_gallery`) continua sendo o registro canônico: ele
+funciona sem o CommerceKit, alimenta o campo do admin e é o que o PILAR B enxerga.
+`commercekit_image_gallery` é só o espelho de renderização.
 
 ## Empacotamento
 

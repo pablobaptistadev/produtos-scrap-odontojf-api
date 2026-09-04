@@ -46,6 +46,60 @@ function ojf_variation_gallery_image_ids($variation_id) {
     return array_values(array_unique(array_filter($ids)));
 }
 
+/* ── COMMERCEKIT (renderização nativa) ────────────────────────────────────── */
+
+/**
+ * Espelha a galeria das variações no meta que o CommerceKit já lê.
+ *
+ * A loja usa o CommerceKit (2.4.2) como galeria da PDP: o markup nativo do
+ * WooCommerce fica estacionado dentro de <template class="wc-product-gallery-
+ * default-template"> e quem desenha é o swiper `#commercegurus-pdp-gallery`.
+ * O módulo "Attributes Gallery" dele já está ligado (commercekit_as.cgkit_attr_gal
+ * = 1) e JÁ funciona com nossos atributos MANUAIS — cgkit_attr_names na loja é
+ * ["attribute_variacao"].
+ *
+ * Formato (lido em includes/pdp-attributes-gallery-swiper.php do CommerceKit):
+ *   post meta `commercekit_image_gallery` no produto PAI
+ *   array [ sanitize_title(<valor da variação>) => "id1,id2,id3" ]
+ * mais as chaves reservadas `default_gallery` e `global_gallery`.
+ *
+ * Escrever aqui é o que faz a galeria trocar sozinha ao escolher a variação, com
+ * swiper, thumbs e lightbox nativos — sem JS nosso e sem acoplar ao tema. O
+ * CommerceKit só sobrescreve esse meta no save do admin
+ * (woocommerce_process_product_meta), então o que gravamos sobrevive.
+ *
+ * Como cada valor do eixo é 1-a-1 com uma variação no nosso modelo, a chave de
+ * um único segmento basta; variações com mais de um atributo são ignoradas
+ * (a chave passaria a depender da ORDEM dos atributos e não vale o risco).
+ *
+ * @param int   $parent_id
+ * @param array $map        [ slug => "csv de attachment ids" ] das variações deste push
+ * @param array $axis_slugs todos os slugs do eixo de variação (para limpar os que sumiram)
+ */
+function ojf_sync_commercekit_gallery($parent_id, $map, $axis_slugs) {
+    $parent_id = (int) $parent_id;
+    if ($parent_id <= 0) return;
+    // Sem o CommerceKit instalado não há meta para manter.
+    if (!function_exists('commercekit_get_attribute_gallery')) return;
+
+    $current = get_post_meta($parent_id, 'commercekit_image_gallery', true);
+    if (!is_array($current)) $current = [];
+
+    $next = [];
+    foreach ($current as $slug => $csv) {
+        // Preserva o que não é nosso: as chaves reservadas do CommerceKit e
+        // qualquer galeria de atributo curada à mão fora do eixo de variação.
+        if ($slug === 'default_gallery' || $slug === 'global_gallery') { $next[$slug] = $csv; continue; }
+        if (!in_array((string) $slug, $axis_slugs, true)) { $next[$slug] = $csv; continue; }
+        // Chave do nosso eixo: só sobrevive se este push ainda a produziu.
+    }
+    foreach ($map as $slug => $csv) {
+        if ($csv !== '') $next[$slug] = $csv;
+    }
+
+    if ($next !== $current) update_post_meta($parent_id, 'commercekit_image_gallery', $next);
+}
+
 /* ── FRONT ────────────────────────────────────────────────────────────────── */
 
 /**
