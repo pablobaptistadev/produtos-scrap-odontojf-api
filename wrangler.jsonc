@@ -51,7 +51,11 @@
     "SCRAPE_SITEMAP_PATH": "/api/sitemap/products",
     "SCRAPE_USER_AGENT": "Mozilla/5.0 (compatible; OdontoJfSync/1.0; +https://odontoapi.wpatomic.com.br)",
     "ERP_BASE_URL": "http://45.227.82.180:8082/ecommerceapi/v1",
-    "WOO_BASE_URL": "https://odonto.wpatomic.com.br",
+    // Effective target in production (confirmed via GET /version). The old
+    // value here pointed at odonto.wpatomic.com.br — deploying with that set
+    // would have repointed the push at the wrong store, since vars in this
+    // file overwrite whatever is configured in the dashboard.
+    "WOO_BASE_URL": "https://dentalodontocirurgica.com.br",
     "REBUILD_INTERVAL_HOURS": "24",
     "DRAIN_BATCH_SIZE": "20",
     "REQUEST_TIMEOUT_MS": "15000",
@@ -59,6 +63,13 @@
     "MEDIA_PUBLIC_BASE_URL": "https://media.odontoapi.wpatomic.com.br",
     "AUTO_ENQUEUE_ERP": "1",
     "AUTO_ENQUEUE_MERGE": "1",
+    // Gates that were only set in the dashboard, so they were missing here.
+    // Values below match observed production behaviour (media runs and pushes
+    // happen). CONFIRM against the dashboard before the first deploy — these
+    // overwrite it. SCRAPE_AUTO_MIRROR is deliberately left unset: its default
+    // when absent is already "on".
+    "AUTO_ENQUEUE_MEDIA": "1",
+    "WOO_PUSH_ENABLED": "1",
     "ERP_FILIAL_CODIGO": "1"
   },
   "triggers": {

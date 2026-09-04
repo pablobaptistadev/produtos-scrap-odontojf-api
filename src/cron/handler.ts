@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { runMigrations } from "../db/schema";
-import { drainPendingToQueue, enqueueRebuild, shouldRebuild } from "../sync/orchestrator";
-import { recordSyncEvent } from "../db/repo";
+import { drainPendingToQueue, enqueueRebuild, shouldRebuild, reconcileWooQueue } from "../sync/orchestrator";
+import { recordSyncEvent, purgeTerminalSyncRows, purgeOldSyncEvents } from "../db/repo";
 import { parseIntEnv } from "../core";
 
 export async function handleScheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
@@ -16,10 +16,51 @@ export async function handleScheduled(_event: ScheduledController, env: Env, _ct
     return;
   }
 
+  // Retention. Both purges are chunk-bounded, so a backlog drains over several
+  // ticks instead of blowing the budget of a single one. Never fatal — a failed
+  // purge must not stop the queue from draining.
+  try {
+    const queueTtlH = parseIntEnv(env.SYNC_QUEUE_TTL_HOURS, 24);
+    const eventsTtlD = parseIntEnv(env.SYNC_EVENTS_TTL_DAYS, 14);
+    const purgedQueue = await purgeTerminalSyncRows(env, { olderThanHours: queueTtlH });
+    const purgedEvents = await purgeOldSyncEvents(env, { olderThanDays: eventsTtlD });
+    if (purgedQueue + purgedEvents > 0) {
+      await recordSyncEvent(env, {
+        stage: "cron",
+        level: "info",
+        message: `retention purge: queue=${purgedQueue} events=${purgedEvents}`,
+      }).catch(() => {});
+    }
+  } catch (err) {
+    await recordSyncEvent(env, {
+      stage: "cron",
+      level: "warn",
+      message: `retention purge failed: ${err instanceof Error ? err.message : String(err)}`,
+    }).catch(() => {});
+  }
+
   if (await shouldRebuild(env)) {
     await enqueueRebuild(env, { reason: "cron-interval" });
   }
 
   const drainSize = parseIntEnv(env.DRAIN_BATCH_SIZE, 20);
   await drainPendingToQueue(env, drainSize);
+
+  // Settle products whose WP-side job finished after we handed it over.
+  try {
+    const settled = await reconcileWooQueue(env, drainSize);
+    if (settled > 0) {
+      await recordSyncEvent(env, {
+        stage: "cron",
+        level: "info",
+        message: `woo reconcile: ${settled} settled`,
+      }).catch(() => {});
+    }
+  } catch (err) {
+    await recordSyncEvent(env, {
+      stage: "cron",
+      level: "warn",
+      message: `woo reconcile failed: ${err instanceof Error ? err.message : String(err)}`,
+    }).catch(() => {});
+  }
 }

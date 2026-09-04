@@ -37,12 +37,33 @@ export interface Env {
   WOO_CONSUMER_KEY?: string;
   WOO_CONSUMER_SECRET?: string;
 
+  /** Bearer token for the OdontoJF Woo Bridge plugin (its `ojf_api_secret`
+   *  option). This is NOT the WooCommerce consumer key/secret pair — the push
+   *  stage talks to the plugin's own namespace, not to core WC REST. */
+  WOO_PLUGIN_API_KEY?: string;
+  /** REST namespace exposed by the bridge plugin. Default: "odontojf/v1". */
+  WOO_PLUGIN_NAMESPACE?: string;
+  /** "plugin" (default) → push through the Woo Bridge queue.
+   *  "wcrest" → legacy path straight at core WooCommerce REST. */
+  WOO_PUSH_MODE?: string;
+  /** By default a product whose ERP lookup failed is NOT pushed (price/stock
+   *  would be wrong). Set to "1" to push anyway. */
+  WOO_PUSH_INCLUDE_ERP_FAILED?: string;
+  /** How many times the push stage polls /queue-status before giving up and
+   *  leaving the row as `processing`. 0 (default) = fire-and-forget. */
+  WOO_PLUGIN_POLL_MAX?: string;
+
   WORKER_API_KEY?: string;
 
   REBUILD_INTERVAL_HOURS?: string;
   DRAIN_BATCH_SIZE?: string;
   REQUEST_TIMEOUT_MS?: string;
   LOG_LEVEL?: string;
+
+  /** Retention for finished sync_queue rows (default 24h) and sync_events
+   *  (default 14 days). Both purges run from the cron, chunk-bounded. */
+  SYNC_QUEUE_TTL_HOURS?: string;
+  SYNC_EVENTS_TTL_DAYS?: string;
 
   /** When "1" / "true", runMergeStage enqueues the push stage automatically.
    *  Otherwise products stop at `merged` until /sync/sku/<sku>?stage=push is

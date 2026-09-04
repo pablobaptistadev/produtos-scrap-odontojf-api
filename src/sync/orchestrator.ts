@@ -15,13 +15,16 @@ import { fetchProductFromErp } from "../erp/client";
 import { mergeScrapeAndErp, type MergedProduct } from "./merge";
 import { mirrorProductMedia, mirrorScrapedMedia } from "./media";
 import { upsertWooProduct } from "../woo/client";
+import { pushProductToPlugin, pollPluginQueue, pluginStatusToWoo } from "../woo/plugin-client";
 import {
   updateScrapeResult,
   updateErpResult,
   updateMergedResult,
   updateWooResult,
+  updateWooQueueResult,
+  listWooQueuePending,
 } from "../db/repo";
-import { safeJsonParse } from "../core";
+import { safeJsonParse, parseIntEnv } from "../core";
 
 export const STAGES: SyncQueueMessage["stage"][] = ["rebuild", "scrape", "erp", "merge", "media", "push"];
 
@@ -225,14 +228,110 @@ export async function runPushStage(env: Env, sku: string): Promise<void> {
   const product = await getProductBySku(env, sku);
   if (!product) throw new Error(`product not found for sku=${sku}`);
   if (!product.merged_json) throw new Error(`merged payload missing for sku=${sku}`);
+
+  // Never publish a product whose scrape is not clean — the merged payload
+  // would carry stale or partial origin data.
+  if (product.scrape_status !== "ok") {
+    const reason = `scrape not ok (status=${product.scrape_status ?? "unknown"})`;
+    await updateWooResult(env, sku, { status: "skipped", error: reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: reason });
+    return;
+  }
+  // Without ERP the price/stock would be wrong, so skip by default.
+  if (product.erp_status === "failed" && !isFlagOn(env.WOO_PUSH_INCLUDE_ERP_FAILED)) {
+    const reason = "erp data missing — skipped (set WOO_PUSH_INCLUDE_ERP_FAILED=1 to push anyway)";
+    await updateWooResult(env, sku, { status: "skipped", error: reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: reason });
+    return;
+  }
+
   const merged = safeJsonParse<Record<string, unknown>>(product.merged_json);
   if (!merged) throw new Error(`merged payload invalid JSON for sku=${sku}`);
   const wooSku = product.external_sku ?? sku;
-  const result = await upsertWooProduct(env, {
+
+  const mode = (env.WOO_PUSH_MODE ?? "plugin").toLowerCase();
+  if (mode === "wcrest") {
+    await runPushViaWcRest(env, sku, wooSku, merged, product.woo_product_id);
+    return;
+  }
+  await runPushViaPlugin(env, sku, wooSku, merged, product.merged_updated_at, product.woo_product_id);
+}
+
+/**
+ * Default path: hand the product to the OdontoJF Woo Bridge plugin, which
+ * answers with a queue receipt and writes to WooCommerce asynchronously.
+ * The row therefore lands as `processing` + `woo_queue_id`; the terminal state
+ * arrives either from the optional poll loop below or from a later reconcile.
+ */
+async function runPushViaPlugin(
+  env: Env,
+  sku: string,
+  wooSku: string,
+  merged: Record<string, unknown>,
+  mergedUpdatedAt: string | null,
+  existingWooId: number | null,
+): Promise<void> {
+  const r = await pushProductToPlugin(env, {
     sku: wooSku,
     merged,
-    existingId: product.woo_product_id,
+    mergedUpdatedAt,
+    preferUpdate: existingWooId != null,
   });
+
+  if (r.status === "skipped") {
+    await updateWooQueueResult(env, sku, { status: "skipped", error: r.reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: r.reason ?? "skipped" });
+    return;
+  }
+  if (r.status === "failed") {
+    await updateWooQueueResult(env, sku, { status: "failed", error: r.reason, response: r.response });
+    throw new Error(`woo plugin push failed: ${r.reason}`);
+  }
+
+  const nowTs = new Date().toISOString();
+  await updateWooQueueResult(env, sku, {
+    status: "processing",
+    queueId: r.queueId ?? null,
+    queueStatus: "pending",
+    pushedAt: nowTs,
+    response: r.response,
+    error: null,
+  });
+  await recordSyncEvent(env, {
+    sku,
+    stage: "push",
+    level: "info",
+    message: `woo enqueued on WP (queue_id=${r.queueId ?? "?"})`,
+    context: { queueId: r.queueId },
+  });
+
+  const pollMax = parseIntEnv(env.WOO_PLUGIN_POLL_MAX, 0);
+  if (pollMax > 0 && r.queueId) {
+    for (let i = 0; i < pollMax; i++) {
+      const st = await pollPluginQueue(env, r.queueId);
+      if (st && (st.status === "completed" || st.status === "passed" || st.status === "failed")) {
+        await updateWooQueueResult(env, sku, {
+          status: pluginStatusToWoo(st.status),
+          queueStatus: st.status,
+          productId: st.productId,
+          durationMs: st.durationMs,
+          error: st.status === "failed" ? ((st.error as string) ?? "WP handler failed") : null,
+        });
+        return;
+      }
+    }
+  }
+}
+
+/** Legacy path (`WOO_PUSH_MODE=wcrest`): write straight to core WooCommerce. */
+async function runPushViaWcRest(
+  env: Env,
+  sku: string,
+  wooSku: string,
+  merged: Record<string, unknown>,
+  existingWooId: number | null,
+): Promise<void> {
+  const result = await upsertWooProduct(env, { sku: wooSku, merged, existingId: existingWooId });
   if (result.status === "skipped") {
     await updateWooResult(env, sku, { status: "skipped", error: result.reason });
     await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: result.reason });
@@ -243,6 +342,25 @@ export async function runPushStage(env: Env, sku: string): Promise<void> {
     throw new Error(`woo push failed: ${result.reason}`);
   }
   await updateWooResult(env, sku, { status: "ok", productId: result.productId, response: result.response });
+
+  if (result.variations) {
+    const v = result.variations;
+    await recordSyncEvent(env, {
+      sku,
+      stage: "push",
+      level: v.failed > 0 ? "warn" : "info",
+      message: `woo push ok (parentId=${result.productId} created=${result.created}; variations: created=${v.created} updated=${v.updated} deleted=${v.deleted} failed=${v.failed})`,
+      context: { productId: result.productId, variations: v },
+    });
+  } else {
+    await recordSyncEvent(env, {
+      sku,
+      stage: "push",
+      level: "info",
+      message: `woo push ok (parentId=${result.productId} created=${result.created})`,
+      context: { productId: result.productId },
+    });
+  }
 }
 
 // ---- cron helpers ----
@@ -253,6 +371,35 @@ export async function shouldRebuild(env: Env): Promise<boolean> {
   const intervalHours = Number.parseInt(env.REBUILD_INTERVAL_HOURS ?? "24", 10);
   const ageMs = Date.now() - new Date(last).getTime();
   return ageMs > intervalHours * 3600 * 1000;
+}
+
+/**
+ * The bridge writes to WooCommerce asynchronously, so a push that returned
+ * `queued` leaves the row as `processing`. This settles those rows by polling
+ * the plugin's queue — run from the cron so a product never gets stuck showing
+ * `processing` forever when the in-request poll loop is disabled (the default).
+ */
+export async function reconcileWooQueue(env: Env, limit: number): Promise<number> {
+  if ((env.WOO_PUSH_MODE ?? "plugin").toLowerCase() === "wcrest") return 0;
+  const rows = await listWooQueuePending(env, limit);
+  let settled = 0;
+  for (const row of rows) {
+    const st = await pollPluginQueue(env, row.woo_queue_id);
+    if (!st) continue;
+    if (st.status === "completed" || st.status === "passed" || st.status === "failed") {
+      await updateWooQueueResult(env, row.sku, {
+        status: pluginStatusToWoo(st.status),
+        queueStatus: st.status,
+        productId: st.productId,
+        durationMs: st.durationMs,
+        error: st.status === "failed" ? ((st.error as string) ?? "WP handler failed") : null,
+      });
+      settled++;
+    } else if (st.status === "processing") {
+      await updateWooQueueResult(env, row.sku, { queueStatus: "processing" });
+    }
+  }
+  return settled;
 }
 
 export async function drainPendingToQueue(env: Env, limit: number): Promise<number> {
