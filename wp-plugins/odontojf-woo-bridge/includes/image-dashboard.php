@@ -7,8 +7,8 @@
  *
  * INSTALAR: Copiar para wp-content/mu-plugins/ ou ativar como snippet.
  *
- * Plugin Name: FullBAI Image Queue Dashboard
- * Version: 2.1.0
+ * (arquivo INCLUÍDO pelo odontojf-woo-bridge.php — não é um plugin próprio)
+ * Origem: FullBAI Image Queue Dashboard v2.1.0
  */
 
 if (!defined('ABSPATH')) exit;

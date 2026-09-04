@@ -2,7 +2,7 @@
 /**
  * FullBAI API Queue
  *
- * Version: 2.4.1
+ * Origem: FullBAI API Queue v2.4.1 (portado verbatim)
  *
  * Intercepta as requests da API DEPOIS de toda validação (auth, seller, SKU,
  * ownership) e salva na fila APENAS a execução pesada.
@@ -22,8 +22,8 @@
  * INSTALAR:
  *   Copiar para wp-content/mu-plugins/fullbai-api-queue.php
  *
- * Plugin Name: FullBAI API Queue
- * Version: 2.4.1
+ * (arquivo INCLUÍDO pelo odontojf-woo-bridge.php — não é um plugin próprio)
+ * Origem: FullBAI API Queue v2.4.1
  */
 
 if (!defined('ABSPATH')) exit;
