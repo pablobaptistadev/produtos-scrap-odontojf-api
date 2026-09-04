@@ -85,6 +85,21 @@ function ojf_sync_commercekit_gallery($parent_id, $map, $axis_slugs) {
     $current = get_post_meta($parent_id, 'commercekit_image_gallery', true);
     if (!is_array($current)) $current = [];
 
+    // Sem `default_gallery` o JS do CommerceKit não tem para onde voltar quando a
+    // seleção é limpa (reset_data). O CommerceKit só cria essa chave no save do
+    // admin, e produtos nossos nascem pela REST — então semeia com a galeria do
+    // próprio pai.
+    if (!isset($current['default_gallery'])) {
+        $parent = wc_get_product($parent_id);
+        if ($parent) {
+            $pids = [];
+            if ($parent->get_image_id()) $pids[] = (int) $parent->get_image_id();
+            foreach ((array) $parent->get_gallery_image_ids() as $g) $pids[] = (int) $g;
+            $pids = array_values(array_unique(array_filter($pids)));
+            if ($pids) $current['default_gallery'] = implode(',', $pids);
+        }
+    }
+
     $next = [];
     foreach ($current as $slug => $csv) {
         // Preserva o que não é nosso: as chaves reservadas do CommerceKit e
