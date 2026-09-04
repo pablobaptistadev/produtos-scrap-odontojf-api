@@ -1,0 +1,715 @@
+<?php
+/**
+ * OdontoJF Woo Bridge — product create/update/delete handlers.
+ *
+ * Key adaptations vs the multi-seller reference:
+ *   - native _sku = ERP code (NOT a random Full-XXXX); find-or-create by _sku.
+ *   - MANUAL attributes only (WC_Product_Attribute->set_id(0)); no global pa_*.
+ *   - generic meta_data[] loop (preserves all _odontojf_* keys).
+ *   - categories[{name}] → resolve/create term ids.
+ *   - images via the image queue (ojf_upload_image returns an attachment id now,
+ *     CDN URL fills in async).
+ * Each handler returns execution_time_ms so the api_queue records duration_ms.
+ */
+
+if (!defined('ABSPATH')) exit;
+
+/* ── route registration (interceptado pela api-queue → enfileira) ─────────── */
+add_action('rest_api_init', function () {
+    $ns = OJF_NAMESPACE;
+    register_rest_route($ns, '/create-product', [
+        'methods' => 'POST', 'permission_callback' => 'ojf_rest_permission', 'callback' => 'ojf_create_product_handler',
+    ]);
+    register_rest_route($ns, '/update-product', [
+        'methods' => 'POST', 'permission_callback' => 'ojf_rest_permission', 'callback' => 'ojf_update_product_handler',
+    ]);
+    register_rest_route($ns, '/delete-product', [
+        'methods' => 'POST', 'permission_callback' => 'ojf_rest_permission', 'callback' => 'ojf_delete_product_handler',
+    ]);
+    register_rest_route($ns, '/sync-categories', [
+        'methods' => 'POST', 'permission_callback' => 'ojf_rest_permission', 'callback' => 'ojf_sync_categories_handler',
+    ]);
+    // Price-only update: SÍNCRONO (não passa pela api-queue), só mexe em preço/estoque.
+    register_rest_route($ns, '/update-price', [
+        'methods' => 'POST', 'permission_callback' => 'ojf_rest_permission', 'callback' => 'ojf_update_price_handler',
+    ]);
+    register_rest_route($ns, '/health', [
+        'methods' => 'GET', 'permission_callback' => '__return_true',
+        'callback' => function () { return new WP_REST_Response(['ok' => true, 'api_version' => OJF_BRIDGE_VERSION], 200); },
+    ]);
+});
+
+/**
+ * Cria a ÁRVORE de categorias inteira (de uma vez, ANTES dos produtos), com
+ * hierarquia certa. Recebe os nós da origem {id, title, parent} e cria em ondas
+ * (pai antes do filho), mapeando id-da-origem → term_id do WP. Síncrono (não
+ * passa pela fila). Idempotente (reusa termo existente no mesmo pai).
+ */
+function ojf_sync_categories_handler($request) {
+    $body  = $request->get_json_params();
+
+    // MODO root_parent: põe TODAS as raízes (parent=0) sob uma categoria MÃE.
+    // Ex: {"root_parent": 91656} → "Loja" vira mãe de tudo. Rodar SÓ no final
+    // (depois dos produtos), senão o push criaria raízes duplicadas no nível 0.
+    if (!empty($body['root_parent'])) {
+        $rp = (int) $body['root_parent'];
+        $roots = get_terms(['taxonomy' => 'product_cat', 'parent' => 0, 'hide_empty' => false, 'fields' => 'ids']);
+        $moved = 0;
+        foreach ((array) $roots as $tid) {
+            $tid = (int) $tid;
+            if ($tid <= 0 || $tid === $rp) continue;
+            if (!is_wp_error(wp_update_term($tid, 'product_cat', ['parent' => $rp]))) $moved++;
+        }
+        return new WP_REST_Response(['ok' => true, 'mode' => 'root_parent', 'parent' => $rp, 'moved' => $moved], 200);
+    }
+
+    // WIPE: apaga TODAS as categorias antes de recriar (recria 100% igual ao menu).
+    $wiped = 0;
+    if (!empty($body['wipe'])) {
+        $all = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'fields' => 'ids']);
+        foreach ((array) $all as $tid) {
+            $tid = (int) $tid;
+            if ($tid > 0 && wp_delete_term($tid, 'product_cat') === true) $wiped++;
+        }
+    }
+
+    // MODO PATHS: caminhos [[{name,slug},...]] (ou [["Nome",...]]) — cria
+    // hierarquicamente gravando o SLUG EXATO da origem (URL igual).
+    if (isset($body['paths']) && is_array($body['paths'])) {
+        $created = 0; $reused = 0; $skipped = 0;
+        foreach ($body['paths'] as $path) {
+            if (!is_array($path)) continue;
+            $parent = 0;
+            foreach ($path as $item) {
+                if (is_array($item)) { $name = trim((string) ($item['name'] ?? '')); $slug = trim((string) ($item['slug'] ?? '')); }
+                else { $name = trim((string) $item); $slug = ''; }
+                if ($name === '') continue;
+                $existed = false;
+                $cid = ojf_get_or_create_category_id_slug($name, (int) $parent, $slug, $existed);
+                if ($cid) { $existed ? $reused++ : $created++; $parent = (int) $cid; }
+                else { $skipped++; break; }
+            }
+        }
+        return new WP_REST_Response(['ok' => true, 'mode' => 'paths', 'wiped' => $wiped, 'created' => $created, 'reused' => $reused, 'skipped' => $skipped], 200);
+    }
+
+    // MODO NODES (árvore da origem por id/parent)
+    $nodes = (isset($body['nodes']) && is_array($body['nodes'])) ? $body['nodes'] : [];
+    if (empty($nodes)) return new WP_REST_Response(['ok' => false, 'error' => 'no paths/nodes'], 400);
+
+    $byId = [];
+    foreach ($nodes as $n) {
+        $id = (string) ($n['id'] ?? '');
+        if ($id === '') continue;
+        $parent = $n['parent'] ?? null;
+        if (is_array($parent)) $parent = $parent[0] ?? null;
+        $byId[$id] = ['title' => trim((string) ($n['title'] ?? '')), 'parent' => ($parent ? (string) $parent : null)];
+    }
+
+    $termOf = []; $created = 0; $reused = 0; $skipped = 0;
+    $pending = array_keys($byId); $guard = 0;
+    while (!empty($pending) && $guard < 60) {
+        $guard++; $next = [];
+        foreach ($pending as $id) {
+            $node = $byId[$id]; $par = $node['parent']; $parentTerm = 0;
+            if ($par !== null && isset($byId[$par])) {
+                if (isset($termOf[$par])) { $parentTerm = $termOf[$par]; }
+                else { $next[] = $id; continue; } // pai ainda não criado → próxima onda
+            }
+            if ($node['title'] === '') { $skipped++; continue; }
+            $before = get_terms(['taxonomy' => 'product_cat', 'parent' => (int) $parentTerm, 'name' => $node['title'], 'hide_empty' => false, 'number' => 1, 'fields' => 'ids']);
+            $exists = !is_wp_error($before) && !empty($before);
+            $cid = ojf_get_or_create_category_id($node['title'], (int) $parentTerm);
+            if ($cid) { $termOf[$id] = (int) $cid; $exists ? $reused++ : $created++; }
+            else { $skipped++; }
+        }
+        if (count($next) === count($pending)) break; // sem progresso (ciclo/pais ausentes)
+        $pending = $next;
+    }
+    return new WP_REST_Response(['ok' => true, 'total' => count($byId), 'created' => $created, 'reused' => $reused, 'skipped' => $skipped, 'unresolved' => count($pending)], 200);
+}
+
+/* ── helpers ──────────────────────────────────────────────────────────────── */
+
+function ojf_find_product_id_by_sku($sku) {
+    $sku = (string) $sku;
+    if ($sku === '') return 0;
+    global $wpdb;
+    // Só PRODUTOS-PAI (post_type='product'), NUNCA variações. Uma variação com o
+    // código cru (de push antigo/race com concorrência>1) sequestrava o SKU e o
+    // wc_get_product_id_by_sku devolvia a variação → o create do variável quebrava
+    // ("SKU inválido ou duplicado" / "Produto inválido"). Aqui ignoramos variações.
+    return (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT p.ID FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_sku'
+         WHERE m.meta_value = %s AND p.post_type = 'product' AND p.post_status != 'trash'
+         ORDER BY p.ID ASC LIMIT 1", $sku
+    ));
+}
+
+/** Libera um SKU sequestrado por variações órfãs (re-sufixa a variação) para que
+ *  o produto-PAI possa reivindicá-lo sem o erro "SKU inválido ou duplicado". */
+function ojf_free_sku_from_variations($sku) {
+    $sku = (string) $sku;
+    if ($sku === '') return;
+    global $wpdb;
+    $vids = $wpdb->get_col($wpdb->prepare(
+        "SELECT p.ID FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_sku'
+         WHERE m.meta_value = %s AND p.post_type = 'product_variation'", $sku
+    ));
+    foreach ($vids as $vid) {
+        $v = wc_get_product((int) $vid);
+        if ($v) { $v->set_sku($sku . '-v' . (int) $vid); $v->save(); }
+    }
+}
+
+/** Libera um SKU de QUALQUER detentor (produto, variação, draft, lixeira) EXCETO
+ *  $keep_id. Órfãos de tentativas anteriores (que o store API não mostra por
+ *  serem draft/trash) seguravam o código e a variação batia "SKU duplicado".
+ *  Variação órfã → re-sufixa; produto/draft órfão → apaga (é lixo de re-push). */
+function ojf_free_sku_global($sku, $keep_id = 0) {
+    $sku = (string) $sku;
+    if ($sku === '') return;
+    global $wpdb;
+    $keep_id = (int) $keep_id;
+    $ids = $wpdb->get_results($wpdb->prepare(
+        "SELECT p.ID, p.post_type FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_sku'
+         WHERE m.meta_value = %s AND p.ID <> %d", $sku, $keep_id
+    ));
+    foreach ($ids as $r) {
+        $pid = (int) $r->ID;
+        if ($r->post_type === 'product_variation') {
+            $v = wc_get_product($pid);
+            if ($v) { $v->set_sku($sku . '-v' . $pid); $v->save(); }
+        } else {
+            // produto-pai órfão (draft/lixo de tentativa anterior) → apaga de vez
+            wp_delete_post($pid, true);
+        }
+        clean_post_cache($pid);
+    }
+}
+
+/** Compat com o interceptor da api-queue (update/delete): acha por _sku (ERP),
+ *  ignorando o conceito de seller (single-tenant). */
+function ojf_buscar_produto_por_sku($sku, $seller = null) {
+    return ojf_find_product_id_by_sku($sku);
+}
+
+/** Todos os IDs de anexo de um produto: featured + galeria + imagens das variações. */
+function ojf_collect_product_attachment_ids($product) {
+    if (!$product instanceof WC_Product) return [];
+    $ids = [];
+    if ($product->get_image_id()) $ids[] = (int) $product->get_image_id();
+    foreach ((array) $product->get_gallery_image_ids() as $g) $ids[] = (int) $g;
+    if ($product->is_type('variable')) {
+        foreach ($product->get_children() as $cid) {
+            $c = wc_get_product($cid);
+            if ($c && $c->get_image_id()) $ids[] = (int) $c->get_image_id();
+        }
+    }
+    return array_values(array_unique(array_filter($ids)));
+}
+
+/**
+ * PILAR A (anti-órfão): ao excluir um produto OU variação por QUALQUER caminho
+ * (nosso endpoint, wp-admin, lixeira esvaziada), deleta os anexos de imagem
+ * dele — o que dispara o hook delete_attachment → ojf_r2_delete (limpa o R2).
+ * Só toca anexos NOSSOS (com object_key R2), nunca mídia de terceiros.
+ */
+add_action('before_delete_post', 'ojf_cleanup_images_on_product_delete', 10, 1);
+function ojf_cleanup_images_on_product_delete($post_id) {
+    $pt = get_post_type($post_id);
+    if ($pt !== 'product' && $pt !== 'product_variation') return;
+    $product = wc_get_product($post_id);
+    if (!$product) return;
+    foreach (ojf_collect_product_attachment_ids($product) as $aid) {
+        if (get_post_meta($aid, '_ojf_r2_object_key', true)) {
+            wp_delete_attachment((int) $aid, true);
+        }
+    }
+    // Imagens do CORPO (post_content): vão DIRETO pro R2, sem virar attachment,
+    // então não saem pelo loop acima. Cada uma fica registrada em meta
+    // _ojf_body_img_<hash> = URL no R2 → extrai a object key e apaga do R2.
+    if ($pt === 'product' && function_exists('ojf_r2_delete')) {
+        global $wpdb;
+        $cdn = rtrim(OJF_CDN_BASE_URL, '/') . '/';
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT meta_value FROM {$wpdb->postmeta}
+             WHERE post_id = %d AND meta_key LIKE %s",
+            $post_id, $wpdb->esc_like('_ojf_body_img_') . '%'
+        ));
+        foreach ((array) $rows as $r) {
+            $url = (string) $r->meta_value;
+            if ($url !== '' && strpos($url, $cdn) === 0) {
+                $key = substr($url, strlen($cdn));
+                if ($key !== '') ojf_r2_delete($key);
+            }
+        }
+    }
+}
+
+function ojf_get_or_create_category_id($name, $parent_id = 0) {
+    $name = trim((string) $name);
+    if ($name === '') return 0;
+    $parent_id = (int) $parent_id;
+
+    // HIERÁRQUICO (preserva a árvore): procura o termo com esse nome DENTRO do
+    // PAI atual do breadcrumb. O mesmo nome em ramos diferentes = categorias
+    // diferentes (hierarquia mantida). REUSA o que já existe nesse pai → nunca
+    // cria 2º igual no mesmo pai. (A slug pode virar "-2" SÓ quando o mesmo nome
+    // é filho de pais diferentes — aí são categorias legítimas e distintas.)
+    $args = ['taxonomy' => 'product_cat', 'parent' => $parent_id, 'name' => $name,
+             'hide_empty' => false, 'number' => 1, 'fields' => 'ids'];
+    $hit = get_terms($args);
+    if (!is_wp_error($hit) && !empty($hit)) return (int) $hit[0];
+
+    $res = wp_insert_term($name, 'product_cat', ['parent' => $parent_id]);
+    if (is_wp_error($res)) {
+        // race: tenta de novo no mesmo pai
+        $hit = get_terms($args);
+        if (!is_wp_error($hit) && !empty($hit)) return (int) $hit[0];
+        $data = $res->get_error_data();
+        return is_array($data) && !empty($data['term_id']) ? (int) $data['term_id'] : 0;
+    }
+    return (int) $res['term_id'];
+}
+
+/**
+ * Igual ao acima, mas grava a SLUG EXATA da origem (URL idêntica ao menu).
+ * Reusa pela slug (única no Woo); senão pelo nome no pai; senão cria com a slug.
+ */
+function ojf_get_or_create_category_id_slug($name, $parent_id = 0, $slug = '', &$existed = false) {
+    $name = trim((string) $name);
+    if ($name === '') { $existed = false; return 0; }
+    $parent_id = (int) $parent_id;
+    $slug = trim((string) $slug);
+
+    if ($slug !== '') {
+        $t = get_term_by('slug', $slug, 'product_cat');
+        if ($t && !is_wp_error($t)) { $existed = true; return (int) $t->term_id; }
+    }
+    $find = ['taxonomy' => 'product_cat', 'parent' => $parent_id, 'name' => $name, 'hide_empty' => false, 'number' => 1, 'fields' => 'ids'];
+    $hit = get_terms($find);
+    if (!is_wp_error($hit) && !empty($hit)) { $existed = true; return (int) $hit[0]; }
+
+    $args = ['parent' => $parent_id];
+    if ($slug !== '') $args['slug'] = $slug;
+    $res = wp_insert_term($name, 'product_cat', $args);
+    $existed = false;
+    if (is_wp_error($res)) {
+        if ($slug !== '') { $t = get_term_by('slug', $slug, 'product_cat'); if ($t && !is_wp_error($t)) { $existed = true; return (int) $t->term_id; } }
+        $hit = get_terms($find);
+        if (!is_wp_error($hit) && !empty($hit)) { $existed = true; return (int) $hit[0]; }
+        $data = $res->get_error_data();
+        return is_array($data) && !empty($data['term_id']) ? (int) $data['term_id'] : 0;
+    }
+    return (int) $res['term_id'];
+}
+
+/** Normalize an attribute name into the slug used as the WC attribute key. */
+function ojf_attr_slug($name) {
+    return sanitize_title(strtoupper((string) $name));
+}
+
+/** Build manual WC_Product_Attribute[] from the payload attributes[]. */
+function ojf_build_manual_attributes($attributes) {
+    $out = [];
+    if (!is_array($attributes)) return $out;
+    foreach ($attributes as $attr) {
+        $name = (string) ($attr['name'] ?? '');
+        $options = $attr['options'] ?? [];
+        if ($name === '' || empty($options)) continue;
+        $values = array_values(array_filter(array_map(function ($v) {
+            return is_array($v) ? null : trim((string) $v);
+        }, (array) $options), function ($v) { return $v !== null && $v !== ''; }));
+        if (empty($values)) continue;
+
+        $a = new WC_Product_Attribute();
+        $a->set_id(0); // 0 = custom/manual attribute (NOT a global pa_* taxonomy)
+        $a->set_name(ojf_attr_slug($name));
+        $a->set_options($values);
+        $a->set_visible(isset($attr['visible']) ? (bool) $attr['visible'] : true);
+        $a->set_variation(isset($attr['variation']) ? (bool) $attr['variation'] : false);
+        $out[] = $a;
+    }
+    return $out;
+}
+
+/** Apply the common (non-variation) product fields shared by create/update. */
+function ojf_apply_product_fields($product, $data) {
+    if (isset($data['name']))              $product->set_name((string) $data['name']);
+    if (isset($data['description']))       $product->set_description((string) $data['description']);
+    if (isset($data['short_description'])) $product->set_short_description((string) $data['short_description']);
+    if (isset($data['slug']) && $data['slug']) $product->set_slug(sanitize_title((string) $data['slug']));
+
+    // status: SEMPRE publicado (regra do cliente). Produto cadastrado já entra
+    // ativo na loja, sem revisão em rascunho.
+    $product->set_status('publish');
+    $product->set_catalog_visibility('visible');
+
+    $is_variable = ($product instanceof WC_Product_Variable);
+    if (!$is_variable) {
+        if (isset($data['regular_price'])) $product->set_regular_price((string) $data['regular_price']);
+        if (isset($data['sale_price']) && $data['sale_price'] !== '') $product->set_sale_price((string) $data['sale_price']);
+        if (array_key_exists('stock_quantity', $data) && $data['stock_quantity'] !== null) {
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity((int) $data['stock_quantity']);
+        }
+        if (!empty($data['stock_status'])) $product->set_stock_status((string) $data['stock_status']);
+        if (!empty($data['weight'])) $product->set_weight((string) $data['weight']);
+    }
+
+    if (!empty($data['dimensions']) && is_array($data['dimensions'])) {
+        $d = $data['dimensions'];
+        if (!empty($d['length'])) $product->set_length((string) $d['length']);
+        if (!empty($d['width']))  $product->set_width((string) $d['width']);
+        if (!empty($d['height'])) $product->set_height((string) $d['height']);
+    }
+
+    // categories — HIERÁRQUICAS: o array vem como breadcrumb [raiz, ..., folha].
+    // Cada nível é criado como FILHO do anterior (Dentística e Estética → Adesivo),
+    // não flat. O produto é atribuído a todo o caminho.
+    $ids = [];
+    if (!empty($data['categories']) && is_array($data['categories'])) {
+        $parent = 0;
+        foreach ($data['categories'] as $cat) {
+            $cname = is_array($cat) ? ($cat['name'] ?? '') : (string) $cat;
+            $cid = ojf_get_or_create_category_id($cname, $parent);
+            if ($cid) { $ids[] = $cid; $parent = $cid; }
+        }
+    }
+    // Categorias vêm SÓ do breadcrumb que o worker manda. (Orçamento NÃO é mais
+    // adicionado em todo produto — agora é só nos que vierem na categoria certa,
+    // ex: OLSEN/Cadeira Odontológica. Quem decide é o worker, pela categoria.)
+    if ($ids) $product->set_category_ids(array_values(array_unique($ids)));
+
+    // manual attributes
+    $attrs = ojf_build_manual_attributes($data['attributes'] ?? []);
+    if ($attrs) $product->set_attributes($attrs);
+
+    // generic meta_data loop (preserves _odontojf_*)
+    if (!empty($data['meta_data']) && is_array($data['meta_data'])) {
+        foreach ($data['meta_data'] as $m) {
+            if (!isset($m['key'])) continue;
+            $product->update_meta_data((string) $m['key'], $m['value'] ?? '');
+        }
+    }
+
+    // single-tenant owner tag — mantém o ownership-check do interceptor da
+    // api-queue (update/delete) passando para o seller fixo 'odontojf'.
+    $product->update_meta_data('_seller', 'odontojf');
+
+    // código ERP do produto (p/ a consulta de preço/estoque no carrinho).
+    // Em simples = o próprio _sku; no pai variável é só referência (o carrinho
+    // usa o _ojf_erp_code de cada variação).
+    if (!empty($data['sku'])) $product->update_meta_data('_ojf_erp_code', (string) $data['sku']);
+}
+
+/** Attach images: each src → ojf_upload_image → attachment id; first = featured. */
+function ojf_apply_images($product_id, $data) {
+    if (empty($data['images']) || !is_array($data['images'])) return;
+    $ids = [];
+    foreach ($data['images'] as $img) {
+        $src = is_array($img) ? ($img['src'] ?? '') : (string) $img;
+        if ($src === '') continue;
+        $aid = ojf_upload_image($src, $product_id);
+        if ($aid) $ids[] = $aid;
+    }
+    if (!$ids) return;
+    $product = wc_get_product($product_id);
+    if (!$product) return;
+    $product->set_image_id($ids[0]);
+    if (count($ids) > 1) $product->set_gallery_image_ids(array_slice($ids, 1));
+    $product->save();
+}
+
+/** Create/update variations by _sku for a variable parent. */
+function ojf_sync_variations($parent_id, $variations) {
+    if (!is_array($variations)) return 0;
+    $parent = wc_get_product($parent_id);
+    $parent_sku = $parent ? (string) $parent->get_sku() : '';
+    $n = 0;
+    $desired_skus = []; // PILAR C: _sku finais das variações que devem existir
+    foreach ($variations as $var) {
+        $erp_code = (string) ($var['sku'] ?? '');   // código ERP real da variação
+        if ($erp_code === '') continue;
+
+        // _sku da variação = código ERP. Se colidir com o _sku do PAI (o Woo
+        // exige unicidade global), sufixa o _sku da variação — mas o código ERP
+        // real fica em meta _ojf_erp_code (usado pelo carrinho p/ preço/estoque).
+        $vsku = $erp_code;
+        if ($vsku === $parent_sku) {
+            $label = '';
+            if (!empty($var['attributes'][0]['option'])) $label = sanitize_title((string) $var['attributes'][0]['option']);
+            $vsku = $erp_code . '-' . ($label !== '' ? $label : 'v');
+        }
+
+        $existing_id = function_exists('wc_get_product_id_by_sku') ? (int) wc_get_product_id_by_sku($vsku) : 0;
+        // só reusa se for MESMO uma variação (evita pegar o pai/simples por engano)
+        if ($existing_id && get_post_type($existing_id) !== 'product_variation') $existing_id = 0;
+        $variation = $existing_id ? new WC_Product_Variation($existing_id) : new WC_Product_Variation();
+        $variation->set_parent_id($parent_id);
+        // Libera o SKU de qualquer órfão (draft/variação de tentativa anterior)
+        // antes de reivindicar → resolve "SKU inválido ou duplicado" no retry.
+        ojf_free_sku_global($vsku, $existing_id);
+        $variation->set_sku($vsku);
+        $variation->update_meta_data('_ojf_erp_code', $erp_code); // código ERP p/ o carrinho
+        $variation->set_status('publish');
+        if (isset($var['regular_price'])) $variation->set_regular_price((string) $var['regular_price']);
+        if (isset($var['sale_price']) && $var['sale_price'] !== '') $variation->set_sale_price((string) $var['sale_price']);
+        if (array_key_exists('stock_quantity', $var) && $var['stock_quantity'] !== null) {
+            $variation->set_manage_stock(true);
+            $variation->set_stock_quantity((int) $var['stock_quantity']);
+        }
+        if (!empty($var['weight'])) $variation->set_weight((string) $var['weight']);
+        if (!empty($var['dimensions']) && is_array($var['dimensions'])) {
+            $d = $var['dimensions'];
+            if (!empty($d['length'])) $variation->set_length((string) $d['length']);
+            if (!empty($d['width']))  $variation->set_width((string) $d['width']);
+            if (!empty($d['height'])) $variation->set_height((string) $d['height']);
+        }
+        // attributes: key MUST equal the parent's manual attribute slug
+        if (!empty($var['attributes']) && is_array($var['attributes'])) {
+            $va = [];
+            foreach ($var['attributes'] as $a) {
+                $aname = (string) ($a['name'] ?? '');
+                $opt   = (string) ($a['option'] ?? '');
+                if ($aname === '' || $opt === '') continue;
+                $va[ojf_attr_slug($aname)] = $opt;
+            }
+            if ($va) $variation->set_attributes($va);
+        }
+        if (!empty($var['meta_data']) && is_array($var['meta_data'])) {
+            foreach ($var['meta_data'] as $m) {
+                if (isset($m['key'])) $variation->update_meta_data((string) $m['key'], $m['value'] ?? '');
+            }
+        }
+        $vid = $variation->save();
+        // variation image (async via queue)
+        if (!empty($var['image']['src'])) {
+            $aid = ojf_upload_image($var['image']['src'], $parent_id);
+            if ($aid) { $variation->set_image_id($aid); $variation->save(); }
+        }
+        if ($vid) { $n++; $desired_skus[] = $vsku; }
+    }
+
+    // PILAR C (anti-órfão): remove variações que NÃO existem mais no payload.
+    // O delete da variação dispara o hook que limpa a imagem dela no R2.
+    if ($parent && $parent->is_type('variable')) {
+        foreach ($parent->get_children() as $cid) {
+            $c = wc_get_product($cid);
+            if ($c && !in_array((string) $c->get_sku(), $desired_skus, true)) {
+                $c->delete(true);
+            }
+        }
+    }
+    return $n;
+}
+
+/* ── handlers (return WP_REST_Response or WP_Error) ───────────────────────── */
+
+function ojf_create_product_handler($request) {
+    $t0 = microtime(true);
+    $data = $request->get_json_params();
+    if (!is_array($data) || empty($data['sku']) || empty($data['name']) || empty($data['type'])) {
+        return new WP_Error('bad_request', 'sku, name e type são obrigatórios', ['status' => 400]);
+    }
+
+    $sku = (string) $data['sku'];
+    $existing = ojf_find_product_id_by_sku($sku);
+    $is_variable = ($data['type'] === 'variable');
+
+    try {
+        // PILAR B (anti-órfão): no UPDATE, guarda os anexos atuais ANTES de
+        // trocar as imagens, pra deletar depois os que saírem (galeria/variação
+        // que mudou). Limpa o R2 via hook delete_attachment.
+        $old_att_ids = $existing ? ojf_collect_product_attachment_ids(wc_get_product($existing)) : [];
+        // preço antigo (simples) para registrar mudança no histórico via sync.
+        $old_price = ($existing && !$is_variable && ($ep = wc_get_product($existing))) ? $ep->get_regular_price() : null;
+
+        if ($existing) {
+            $product = $is_variable ? new WC_Product_Variable($existing) : wc_get_product($existing);
+            if (!$product) $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
+        } else {
+            $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
+            // Libera o SKU de variações órfãs antes do pai reivindicar (evita
+            // "SKU inválido ou duplicado" quando uma variação cru segurava o código).
+            ojf_free_sku_global($sku, $existing ?: 0);
+            $product->set_sku($sku);
+        }
+        ojf_apply_product_fields($product, $data);
+        $product_id = $product->save();
+        if (!$product_id) throw new Exception('save() retornou 0');
+
+        $vcount = 0;
+        if ($is_variable) {
+            $vcount = ojf_sync_variations($product_id, $data['variations'] ?? []);
+            // recompute price range / sync
+            if (class_exists('WC_Product_Variable')) WC_Product_Variable::sync($product_id);
+        }
+        ojf_apply_images($product_id, $data);
+
+        // IMAGENS DO CORPO (post_content) → R2 da loja. Precisa do product_id, então
+        // roda APÓS o save. Baixa cada <img> externa (media.odontoapi etc.), sobe pro
+        // R2 e reescreve o src → resolve as imagens quebradas (hotlink/erro 1011).
+        if (isset($data['description']) && function_exists('ojf_process_body_images')) {
+            $orig_desc  = (string) $data['description'];
+            $fixed_desc = ojf_process_body_images($orig_desc, $product_id);
+            if ($fixed_desc !== $orig_desc) {
+                $pp = wc_get_product($product_id);
+                if ($pp) { $pp->set_description($fixed_desc); $pp->save(); }
+            }
+        }
+
+        // registra mudança de preço (simples) no histórico, se mudou no update.
+        if (!$is_variable && $old_price !== null && $old_price !== '' && isset($data['regular_price'])
+            && function_exists('ojf_log_price_change_sync')) {
+            ojf_log_price_change_sync($product_id, (float) $old_price, (float) $data['regular_price']);
+        }
+
+        // PILAR B: deleta os anexos antigos que não fazem mais parte do produto
+        // (somente os NOSSOS — com object_key R2 — pra não tocar mídia de terceiros).
+        if ($old_att_ids) {
+            $new_att_ids = ojf_collect_product_attachment_ids(wc_get_product($product_id));
+            foreach (array_diff($old_att_ids, $new_att_ids) as $aid) {
+                if (get_post_meta($aid, '_ojf_r2_object_key', true)) {
+                    wp_delete_attachment((int) $aid, true); // → hook limpa o R2
+                }
+            }
+        }
+
+        return new WP_REST_Response([
+            'success'            => true,
+            'product_id'         => (int) $product_id,
+            'sku'                => $sku,
+            'created'            => !$existing,
+            'variations_created' => $vcount,
+            'execution_time_ms'  => (int) round((microtime(true) - $t0) * 1000),
+            'api_version'        => OJF_BRIDGE_VERSION,
+        ], 200);
+    } catch (Throwable $e) {
+        return new WP_Error('create_failed', $e->getMessage(), ['status' => 500]);
+    }
+}
+
+function ojf_update_product_handler($request) {
+    // Upsert semantics → identical to create (find-by-_sku internally).
+    return ojf_create_product_handler($request);
+}
+
+function ojf_delete_product_handler($request) {
+    $t0 = microtime(true);
+    $data = $request->get_json_params();
+    $sku = (string) ($data['sku'] ?? '');
+    if ($sku === '') return new WP_Error('bad_request', 'sku obrigatório', ['status' => 400]);
+    $id = ojf_find_product_id_by_sku($sku);
+    if (!$id) return new WP_Error('not_found', "produto _sku={$sku} não existe", ['status' => 404]);
+    $product = wc_get_product($id);
+    if ($product) {
+        foreach ($product->get_children() as $child_id) {
+            $child = wc_get_product($child_id);
+            if ($child) $child->delete(true);
+        }
+        $product->delete(true);
+    }
+    return new WP_REST_Response([
+        'success'           => true,
+        'deleted_id'        => (int) $id,
+        'sku'               => $sku,
+        'execution_time_ms' => (int) round((microtime(true) - $t0) * 1000),
+        'api_version'       => OJF_BRIDGE_VERSION,
+    ], 200);
+}
+
+/**
+ * UPDATE PRICE (price/stock only) — SÍNCRONO e rápido (~ms).
+ *
+ * NÃO passa pela api-queue (rota não interceptada), NÃO exige name/type,
+ * NÃO toca em categorias/imagens/descrição e NÃO apaga variações.
+ * Payload:
+ *   simples:  { "sku":"X", "regular_price":"79.00", "sale_price":"59.00" }
+ *   variável: { "sku":"X", "type":"variable", "variations":[
+ *                {"sku":"X-L","regular_price":"79.00","sale_price":null,"stock_quantity":8}, ... ] }
+ * sale_price null/"" => limpa a oferta. Variações casadas por _sku OU _ojf_erp_code.
+ */
+function ojf_update_price_handler($request) {
+    $t0 = microtime(true);
+    $data = $request->get_json_params();
+    if (!is_array($data) || empty($data['sku'])) {
+        return new WP_Error('bad_request', 'sku obrigatório', ['status' => 400]);
+    }
+    $sku = (string) $data['sku'];
+    $product_id = ojf_find_product_id_by_sku($sku);
+    if (!$product_id) return new WP_Error('not_found', "produto _sku={$sku} não existe", ['status' => 404]);
+    $product = wc_get_product($product_id);
+    if (!$product) return new WP_Error('not_found', "produto inválido id={$product_id}", ['status' => 404]);
+
+    $set_price = function ($obj, $arr) {
+        if (array_key_exists('regular_price', $arr) && $arr['regular_price'] !== null && $arr['regular_price'] !== '') {
+            $obj->set_regular_price((string) $arr['regular_price']);
+        }
+        if (array_key_exists('sale_price', $arr)) {
+            $sp = $arr['sale_price'];
+            $obj->set_sale_price(($sp === null || $sp === '') ? '' : (string) $sp);
+        }
+        if (array_key_exists('stock_quantity', $arr) && $arr['stock_quantity'] !== null) {
+            $obj->set_manage_stock(true);
+            $obj->set_stock_quantity((int) $arr['stock_quantity']);
+        }
+    };
+
+    $is_variable = $product->is_type('variable');
+    $updated_variations = 0;
+    $missing = [];
+
+    try {
+        if (!$is_variable) {
+            $set_price($product, $data);
+            $product->save();
+        } else {
+            // mapa _sku E _ojf_erp_code => variation_id (casa qualquer um dos dois)
+            $by_key = [];
+            foreach ($product->get_children() as $cid) {
+                $c = wc_get_product($cid);
+                if (!$c) continue;
+                $vs = (string) $c->get_sku();
+                if ($vs !== '') $by_key[$vs] = $cid;
+                $erp = (string) $c->get_meta('_ojf_erp_code');
+                if ($erp !== '') $by_key[$erp] = $cid;
+            }
+            $variations = (isset($data['variations']) && is_array($data['variations'])) ? $data['variations'] : [];
+            foreach ($variations as $var) {
+                $vkey = (string) ($var['sku'] ?? '');
+                if ($vkey === '' || !isset($by_key[$vkey])) { if ($vkey !== '') $missing[] = $vkey; continue; }
+                $v = wc_get_product($by_key[$vkey]);
+                if (!$v) { $missing[] = $vkey; continue; }
+                $set_price($v, $var);
+                $v->save();
+                $updated_variations++;
+            }
+            // preço do pai (alguns temas leem) + recomputa faixa
+            if (array_key_exists('regular_price', $data) || array_key_exists('sale_price', $data)) {
+                $set_price($product, $data);
+                $product->save();
+            }
+            if (class_exists('WC_Product_Variable')) WC_Product_Variable::sync($product_id);
+        }
+    } catch (Throwable $e) {
+        return new WP_Error('update_price_failed', $e->getMessage(), ['status' => 500]);
+    }
+
+    if (function_exists('wc_delete_product_transients')) wc_delete_product_transients($product_id);
+
+    return new WP_REST_Response([
+        'success'            => true,
+        'product_id'         => (int) $product_id,
+        'sku'                => $sku,
+        'type'               => $is_variable ? 'variable' : 'simple',
+        'updated_variations' => $updated_variations,
+        'missing_variations' => $missing,
+        'execution_time_ms'  => (int) round((microtime(true) - $t0) * 1000),
+        'api_version'        => OJF_BRIDGE_VERSION,
+    ], 200);
+}
