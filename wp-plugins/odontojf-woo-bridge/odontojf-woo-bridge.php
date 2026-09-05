@@ -2,13 +2,16 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.49
+ * Version: 1.0.50
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.50 - Campo de quantidade proprio com - e +, alinhado ao botao, com
+ *          controles no widget. O input nativo do Woo continua no form, so
+ *          envolvido: min/max/step, estoque e venda individual seguem valendo.
  *  1.0.49 - Estilo do seletor de variacao (swatches do CommerceKit) no widget:
  *          tipografia, espacamentos, raio e cores nos tres estados, mais a
  *          chave que solta o tamanho fixo que cortava rotulos como N°18R.
@@ -171,7 +174,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.49');
+define('OJF_BRIDGE_VERSION', '1.0.50');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

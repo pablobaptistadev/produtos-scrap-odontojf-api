@@ -102,6 +102,13 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
             'placeholder' => esc_html__('Deixe vazio para manter o texto do WooCommerce', 'odontojf'),
         ));
 
+        $this->add_control('qty_custom', array(
+            'label' => esc_html__('Campo de quantidade próprio', 'odontojf'),
+            'description' => esc_html__('Troca o input do WooCommerce por um com − e + controláveis. O campo nativo continua por baixo, então o carrinho recebe o mesmo dado.', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SWITCHER,
+            'default' => 'yes',
+        ));
+
         $this->add_control('mostrar_icone', array(
             'label' => esc_html__('Ícone', 'odontojf'),
             'type' => \Elementor\Controls_Manager::SWITCHER,
@@ -269,6 +276,94 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
 
         $this->end_controls_section();
 
+        /* ── Quantidade ── */
+        $this->start_controls_section('secao_estilo_qty', array(
+            'label' => esc_html__('Quantidade', 'odontojf'),
+            'tab' => \Elementor\Controls_Manager::TAB_STYLE,
+        ));
+
+        $qty  = '{{WRAPPER}} .ojf-atc .ojf-qty';
+        $qin  = $qty . ' input.qty';
+        $qbtn = $qty . ' .ojf-qty-btn';
+
+        $this->add_control('qty_igualar', array(
+            'label' => esc_html__('Igualar altura ao botão', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SWITCHER,
+            'default' => 'yes',
+            'selectors' => array(
+                '{{WRAPPER}} .ojf-atc form.cart .woocommerce-variation-add-to-cart, {{WRAPPER}} .ojf-atc form.cart:not(.variations_form)'
+                    => 'align-items: stretch !important;',
+                $qty => 'height: auto !important;',
+            ),
+        ));
+
+        $this->add_responsive_control('qty_largura', array(
+            'label' => esc_html__('Largura do número', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SLIDER,
+            'range' => array('px' => array('min' => 24, 'max' => 120)),
+            'default' => array('size' => 48, 'unit' => 'px'),
+            'selectors' => array($qin => 'width: {{SIZE}}{{UNIT}} !important;'),
+        ));
+
+        $this->add_responsive_control('qty_botao_largura', array(
+            'label' => esc_html__('Largura dos botões', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SLIDER,
+            'range' => array('px' => array('min' => 24, 'max' => 80)),
+            'default' => array('size' => 38, 'unit' => 'px'),
+            'selectors' => array($qbtn => 'width: {{SIZE}}{{UNIT}} !important;'),
+        ));
+
+        $this->add_responsive_control('qty_icone', array(
+            'label' => esc_html__('Tamanho dos sinais', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SLIDER,
+            'range' => array('px' => array('min' => 8, 'max' => 28)),
+            'default' => array('size' => 14, 'unit' => 'px'),
+            'selectors' => array($qbtn . ' svg' => 'width: {{SIZE}}{{UNIT}} !important; height: {{SIZE}}{{UNIT}} !important;'),
+        ));
+
+        $this->add_responsive_control('qty_raio', array(
+            'label' => esc_html__('Arredondamento', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::DIMENSIONS,
+            'size_units' => array('px', '%'),
+            'selectors' => array($qty => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}} !important;'),
+        ));
+
+        $this->add_group_control(\Elementor\Group_Control_Typography::get_type(), array(
+            'name' => 'qty_tipografia',
+            'selector' => $qin,
+        ));
+
+        $this->add_control('qty_cor', array(
+            'label' => esc_html__('Cor do número', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($qin => 'color: {{VALUE}} !important;'),
+        ));
+
+        $this->add_control('qty_fundo', array(
+            'label' => esc_html__('Fundo', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($qty => 'background: {{VALUE}} !important;'),
+        ));
+
+        $this->add_group_control(\Elementor\Group_Control_Border::get_type(), array(
+            'name' => 'qty_borda',
+            'selector' => $qty,
+        ));
+
+        $this->add_control('qty_btn_cor', array(
+            'label' => esc_html__('Cor dos sinais', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($qbtn => 'color: {{VALUE}} !important;'),
+        ));
+
+        $this->add_control('qty_btn_hover', array(
+            'label' => esc_html__('Fundo dos sinais no hover', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($qbtn . ':hover:not(:disabled)' => 'background: {{VALUE}} !important;'),
+        ));
+
+        $this->end_controls_section();
+
         /* ── Variações (swatches do CommerceKit) ── */
         $this->start_controls_section('secao_estilo_swatches', array(
             'label' => esc_html__('Seletor de variação', 'odontojf'),
@@ -424,7 +519,9 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
         // sobrevive por ali.
         ob_start();
         woocommerce_template_single_add_to_cart();
-        echo $this->decorateButton(ob_get_clean(), $settings); // phpcs:ignore WordPress.Security.EscapeOutput
+        $markup = ob_get_clean();
+        $markup = $this->decorateQuantity($markup, $settings);
+        echo $this->decorateButton($markup, $settings); // phpcs:ignore WordPress.Security.EscapeOutput
 
         echo '</div>';
 
@@ -456,6 +553,37 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
 
             return $m[1] . $conteudo . $m[3];
         }, $html, 1);
+    }
+
+    /**
+     * Envolve o input nativo de quantidade com os botões − e +.
+     *
+     * O input do WooCommerce continua ali, com o mesmo name="quantity" e as
+     * mesmas regras de min/max/step — os botões só mexem no value e disparam
+     * change. Substituí-lo por um campo próprio quebraria validação de estoque,
+     * venda individual e qualquer plugin que escute esse input.
+     */
+    private function decorateQuantity($html, $s) {
+        if ($s['qty_custom'] !== 'yes') return $html;
+
+        $html = preg_replace_callback(
+            '#<div([^>]*\bclass="[^"]*\bquantity\b[^"]*"[^>]*)>#i',
+            function ($m) {
+                return '<div' . preg_replace('#class="#', 'class="ojf-qty ', $m[1], 1) . '>';
+            },
+            $html, 1
+        );
+
+        $menos = '<button type="button" class="ojf-qty-btn ojf-qty-minus" aria-label="' . esc_attr__('Diminuir', 'odontojf') . '">'
+               . '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>';
+        $mais  = '<button type="button" class="ojf-qty-btn ojf-qty-plus" aria-label="' . esc_attr__('Aumentar', 'odontojf') . '">'
+               . '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>';
+
+        return preg_replace_callback(
+            '#<input[^>]*\bclass="[^"]*\bqty\b[^"]*"[^>]*>#i',
+            function ($m) use ($menos, $mais) { return $menos . $m[0] . $mais; },
+            $html, 1
+        );
     }
 
     /** @var string */

@@ -42,6 +42,25 @@ function ojf_atc_assets() {
       . '.ojf-atc .ojf-atc-ico svg{width:18px;height:18px;display:block;fill:currentColor}'
       . '.ojf-atc .ojf-atc-ico i{line-height:1}'
       . '.ojf-atc .ojf-atc-label{display:inline-block}'
+        // Campo de quantidade próprio. O input nativo continua no formulário —
+        // só perde as setinhas do navegador e ganha os botões ao lado.
+      . '.ojf-atc .ojf-qty{display:inline-flex!important;align-items:stretch;overflow:hidden;'
+      .   'border:1px solid #dedede;border-radius:4px;background:#fff;flex:0 0 auto}'
+      . '.ojf-atc .ojf-qty input.qty{-moz-appearance:textfield;appearance:textfield;width:48px;'
+      .   'border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;'
+      .   'text-align:center;padding:0 2px!important;margin:0!important;min-height:0!important;'
+      .   'height:auto!important;font:inherit;line-height:1.2;align-self:stretch}'
+      . '.ojf-atc .ojf-qty input.qty::-webkit-outer-spin-button,'
+      .   '.ojf-atc .ojf-qty input.qty::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}'
+      . '.ojf-atc .ojf-qty-btn{appearance:none;border:0;background:transparent;cursor:pointer;'
+      .   'width:38px;padding:0;margin:0;display:inline-flex;align-items:center;justify-content:center;'
+      .   'color:#374151;transition:background .15s ease,opacity .15s ease;-webkit-tap-highlight-color:transparent}'
+      . '.ojf-atc .ojf-qty-btn:hover:not(:disabled){background:rgba(0,0,0,.05)}'
+      . '.ojf-atc .ojf-qty-btn:disabled{opacity:.3;cursor:default}'
+      . '.ojf-atc .ojf-qty-btn:focus-visible{outline:2px solid currentColor;outline-offset:-2px}'
+      . '.ojf-atc .ojf-qty-btn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2;'
+      .   'stroke-linecap:round;display:block}'
+      . '.ojf-atc .ojf-qty label{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}'
       . '.ojf-atc--sem-preco .woocommerce-variation-price{display:none!important}'
       . '.ojf-atc--sem-descricao .woocommerce-variation-description{display:none!important}'
         // Estado de carregando: o botão NÃO muda de cor nem de tamanho — só o
@@ -98,6 +117,52 @@ function ojf_atc_assets() {
   function state(\$btn, html) {
     \$btn.html('<span class="ojf-atc-state">' + html + '</span>');
   }
+
+  /* ---- quantidade: − e + ---- */
+
+  function qtyState(\$wrap) {
+    var \$i = \$wrap.find('input.qty');
+    if (!\$i.length) return;
+    var val = parseFloat(\$i.val());
+    var min = parseFloat(\$i.attr('min'));
+    var max = parseFloat(\$i.attr('max'));
+    \$wrap.find('.ojf-qty-minus').prop('disabled', !isNaN(min) && !(val > min));
+    \$wrap.find('.ojf-qty-plus').prop('disabled', !isNaN(max) && !(val < max));
+  }
+
+  \$(document).on('click', '.ojf-atc .ojf-qty-btn', function () {
+    var \$b = \$(this);
+    var \$wrap = \$b.closest('.ojf-qty');
+    var \$i = \$wrap.find('input.qty');
+    if (!\$i.length || \$i.prop('disabled')) return;
+
+    // Respeita min/max/step do input nativo — é o WooCommerce que decide os
+    // limites (estoque, venda individual, múltiplos).
+    var step = parseFloat(\$i.attr('step')) || 1;
+    var min  = parseFloat(\$i.attr('min'));
+    var max  = parseFloat(\$i.attr('max'));
+    var val  = parseFloat(\$i.val());
+    if (isNaN(val)) val = isNaN(min) ? 1 : min;
+
+    val += \$b.hasClass('ojf-qty-plus') ? step : -step;
+    if (!isNaN(min) && val < min) val = min;
+    if (!isNaN(max) && val > max) val = max;
+
+    var casas = (String(step).split('.')[1] || '').length;
+    \$i.val(casas ? val.toFixed(casas) : val).trigger('change');
+    qtyState(\$wrap);
+  });
+
+  \$(document).on('change input', '.ojf-atc .ojf-qty input.qty', function () {
+    qtyState(\$(this).closest('.ojf-qty'));
+  });
+
+  // O max muda quando a variação muda (estoque diferente por variação).
+  \$(document).on('found_variation reset_data', '.ojf-atc form.cart', function () {
+    setTimeout(function () { \$('.ojf-atc .ojf-qty').each(function () { qtyState(\$(this)); }); }, 0);
+  });
+
+  \$(function () { \$('.ojf-atc .ojf-qty').each(function () { qtyState(\$(this)); }); });
 
   \$(document).on('submit', '.ojf-atc--ajax form.cart', function (e) {
     var \$form = \$(this);
