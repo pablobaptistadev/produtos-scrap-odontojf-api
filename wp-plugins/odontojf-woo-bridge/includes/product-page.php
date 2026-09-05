@@ -298,8 +298,12 @@ function ojf_pp_assets() {
   var CFG = {$cfg};
 
   \$(function () {
-    var \$form = \$('.variations_form').first();
-    if (!\$form.length) return;
+    // A página tem MAIS DE UMA form.variations_form (o template do tema e a do
+    // nosso widget). Prender em .first() ligava tudo na form errada — era por
+    // isso que SKU, "Ler mais" e URL não reagiam enquanto galeria e preço, que
+    // não dependem deste script, funcionavam. Os eventos passam a ser
+    // delegados: valem para qualquer form, inclusive as criadas depois.
+    if (!\$('form.variations_form').length) return;
 
     /* ---- alvos ---- */
 
@@ -407,7 +411,7 @@ function ojf_pp_assets() {
       };
     }
 
-    function clampDescription() {
+    function clampDescription(\$form) {
       var el = \$form.find('.woocommerce-variation-description').first()[0];
       if (!el) return;
       \$('.ojf-more').remove();
@@ -457,15 +461,16 @@ function ojf_pp_assets() {
 
     // show_variation dispara DEPOIS de o core reescrever o .single_variation,
     // então o título injetado aqui nunca duplica.
-    \$form.on('show_variation.ojfPP', function (event, variation) {
+    \$(document).on('show_variation.ojfPP', 'form.variations_form', function (event, variation) {
       if (!variation) return;
+      var \$form = \$(this);
 
       var wrap = \$form.find('.woocommerce-variation.single_variation').first();
       if (wrap.length && variation.ojf_variation_title) {
         wrap.prepend('<div class="ojf-variation-title">' + esc(variation.ojf_variation_title) + '</div>');
       }
 
-      clampDescription();
+      clampDescription(\$form);
 
       animate(function () {
         if (variation.ojf_variation_title) setHtml('title', esc(variation.ojf_variation_title));
@@ -529,13 +534,13 @@ function ojf_pp_assets() {
       document.title = t + tail;
     }
 
-    \$form.on('show_variation.ojfPPUrl', function (event, variation) {
+    \$(document).on('show_variation.ojfPPUrl', 'form.variations_form', function (event, variation) {
       if (!variation) return;
       syncUrl(variation);
       syncDocTitle(variation.ojf_variation_title);
     });
 
-    \$form.on('reset_data.ojfPP', function () {
+    \$(document).on('reset_data.ojfPP', 'form.variations_form', function () {
       animate(restore);
       clearUrl();
       document.title = docTitleOriginal;
