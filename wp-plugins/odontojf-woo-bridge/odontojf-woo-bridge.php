@@ -2,13 +2,25 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.55
+ * Version: 1.0.56
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.56 - GUARDA ANTI-DUPLICACAO: o _sku do pai variavel e sintetico
+ *          (OD-<codigo da 1a variacao>) e a origem reordena/remove tamanhos, entao
+ *          esse codigo muda sozinho. Quando muda, o create nao achava o pai, o Woo
+ *          criava um SEGUNDO produto e o save das variacoes reescrevia o
+ *          post_parent delas — o original ficava vazio e publicado (#773421
+ *          OD-19722 -> #791839 OD-20591, 12 variacoes). Agora, antes de criar, o
+ *          handler procura o produto pelo SLUG da origem (so produtos nossos,
+ *          _seller=odontojf) e, se nao achar, pelo dono atual das variacoes do
+ *          payload; achando, ADOTA e re-chaveia o _sku no lugar. Recusa com 409
+ *          quando adotar seria destrutivo: variacoes espalhadas por mais de um pai
+ *          publicado, ou sobreposicao < 50% com as variacoes vivas do candidato
+ *          (o PILAR C apagaria as de fora).
  *  1.0.55 - FIX: a pagina tem DUAS form.variations_form (a do tema e a do nosso
  *          widget) e o script prendia em .first(), a errada — por isso SKU,
  *          "Ler mais" e URL nao reagiam. Eventos agora sao delegados e valem
@@ -193,7 +205,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.55');
+define('OJF_BRIDGE_VERSION', '1.0.56');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

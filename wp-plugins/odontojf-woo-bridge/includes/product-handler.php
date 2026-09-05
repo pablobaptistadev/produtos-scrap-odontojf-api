@@ -227,6 +227,129 @@ function ojf_variation_owner_of_sku($sku) {
     ];
 }
 
+/**
+ * Produto NOSSO com este slug (>= 1.0.56).
+ *
+ * Só devolve produto marcado como nosso (_seller = odontojf) para nunca adotar
+ * algo cadastrado à mão na loja.
+ *
+ * @param string $slug
+ * @return int
+ */
+function ojf_find_owned_product_by_slug($slug) {
+    $slug = sanitize_title((string) $slug);
+    if ($slug === '') return 0;
+    global $wpdb;
+    return (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT p.ID FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_seller'
+         WHERE p.post_name = %s AND p.post_type = 'product' AND p.post_status = 'publish'
+           AND m.meta_value = 'odontojf'
+         ORDER BY p.ID ASC LIMIT 1", $slug
+    ));
+}
+
+/** Códigos ERP das variações que vêm no payload. @return string[] */
+function ojf_payload_variation_codes($data) {
+    $out = [];
+    if (empty($data['variations']) || !is_array($data['variations'])) return $out;
+    foreach ($data['variations'] as $var) {
+        $c = (string) ($var['sku'] ?? '');
+        if ($c !== '') $out[] = $c;
+    }
+    return array_values(array_unique($out));
+}
+
+/** Códigos ERP das variações VIVAS de um pai. @return array<int,string> id => código */
+function ojf_parent_variation_codes($parent_id) {
+    global $wpdb;
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT p.ID,
+                MAX(CASE WHEN m.meta_key = '_ojf_erp_code' THEN m.meta_value END) AS erp,
+                MAX(CASE WHEN m.meta_key = '_sku'          THEN m.meta_value END) AS sku
+         FROM {$wpdb->posts} p
+         LEFT JOIN {$wpdb->postmeta} m ON m.post_id = p.ID
+         WHERE p.post_parent = %d AND p.post_type = 'product_variation' AND p.post_status != 'trash'
+         GROUP BY p.ID", (int) $parent_id
+    ));
+    $out = [];
+    foreach ((array) $rows as $r) {
+        $code = (string) ($r->erp !== null && $r->erp !== '' ? $r->erp : $r->sku);
+        if ($code !== '') $out[(int) $r->ID] = $code;
+    }
+    return $out;
+}
+
+/**
+ * Acha o produto que este payload JÁ É, quando o _sku não bate (>= 1.0.56).
+ *
+ * O _sku do pai variável é sintético — `OD-<código da 1ª variação>` — e a origem
+ * reordena/remove tamanhos, então esse código muda sozinho. Quando muda, o create
+ * não acha o pai pelo SKU, o Woo cria um SEGUNDO produto e o save das variações
+ * reescreve o post_parent delas: o original fica VAZIO e publicado. Foi exatamente
+ * o que aconteceu com #773421 (OD-19722) -> #791839 (OD-20591), 12 variações.
+ *
+ * Duas âncoras estáveis, nesta ordem:
+ *   1. o slug da origem (chave real do produto lá);
+ *   2. o dono atual das variações do payload.
+ *
+ * Recusa (409) quando adotar seria destrutivo: variações espalhadas por mais de um
+ * pai, ou sobreposição baixa demais com o pai candidato (aí o PILAR C apagaria
+ * variações vivas que não são deste produto).
+ *
+ * @return int|WP_Error  id do produto a atualizar, 0 = criar normalmente
+ */
+function ojf_adopt_existing_product($data, $is_variable) {
+    $codes = ojf_payload_variation_codes($data);
+    $via   = '';
+
+    $candidate = !empty($data['slug']) ? ojf_find_owned_product_by_slug((string) $data['slug']) : 0;
+    if ($candidate) $via = 'slug';
+
+    if (!$candidate && $is_variable && $codes) {
+        $owners = [];
+        foreach ($codes as $c) {
+            $o = ojf_variation_owner_of_sku($c);
+            if ($o) {
+                $pid = (int) $o['parent_id'];
+                $owners[$pid] = isset($owners[$pid]) ? $owners[$pid] + 1 : 1;
+            }
+        }
+        if (count($owners) > 1) {
+            arsort($owners);
+            $desc = [];
+            foreach ($owners as $pid => $n) $desc[] = '#' . $pid . ' (' . $n . ')';
+            return new WP_Error('variations_span_parents', sprintf(
+                'As variações deste payload já pertencem a %d produtos publicados: %s. Recusado: criar um pai novo roubaria as variações e esvaziaria os originais.',
+                count($owners), implode(', ', $desc)
+            ), ['status' => 409]);
+        }
+        if ($owners) {
+            reset($owners);
+            $candidate = (int) key($owners);
+            $via = 'variações';
+        }
+    }
+
+    if (!$candidate) return 0;
+
+    if ($is_variable) {
+        $existing = ojf_parent_variation_codes($candidate);
+        $total    = count($existing);
+        if ($total > 0) {
+            $overlap = count(array_intersect(array_values($existing), $codes));
+            if ($overlap < (int) ceil($total / 2)) {
+                return new WP_Error('adoption_overlap_too_low', sprintf(
+                    'Produto #%d casa por %s mas só %d das %d variações vivas dele estão no payload. Recusado: adotar aqui faria o PILAR C apagar as outras %d.',
+                    $candidate, $via, $overlap, $total, $total - $overlap
+                ), ['status' => 409]);
+            }
+        }
+    }
+
+    return $candidate;
+}
+
 /** Compat com o interceptor da api-queue (update/delete): acha por _sku (ERP),
  *  ignorando o conceito de seller (single-tenant). */
 function ojf_buscar_produto_por_sku($sku, $seller = null) {
@@ -630,6 +753,19 @@ function ojf_create_product_handler($request) {
     $existing = ojf_find_product_id_by_sku($sku);
     $is_variable = ($data['type'] === 'variable');
 
+    // GUARDA ANTI-DUPLICAÇÃO (>= 1.0.56): o _sku do pai não bateu. Antes de criar
+    // um produto novo, confere se ele já existe com OUTRO _sku (slug da origem /
+    // dono das variações). Sem isso o create rouba as variações do original.
+    $adopted_from = '';
+    if (!$existing) {
+        $adopt = ojf_adopt_existing_product($data, $is_variable);
+        if (is_wp_error($adopt)) return $adopt;
+        if ($adopt) {
+            $existing     = (int) $adopt;
+            $adopted_from = (string) get_post_meta($existing, '_sku', true);
+        }
+    }
+
     try {
         // PILAR B (anti-órfão): no UPDATE, guarda os anexos atuais ANTES de
         // trocar as imagens, pra deletar depois os que saírem (galeria/variação
@@ -641,6 +777,14 @@ function ojf_create_product_handler($request) {
         if ($existing) {
             $product = $is_variable ? new WC_Product_Variable($existing) : wc_get_product($existing);
             if (!$product) $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
+            // Adotado por slug/variações: re-chaveia o _sku no produto que já existe,
+            // em vez de deixar um segundo produto nascer com o SKU novo.
+            if ($adopted_from !== '' && $adopted_from !== $sku) {
+                ojf_free_sku_global($sku, $existing);
+                $product->set_sku($sku);
+                $product->update_meta_data('_ojf_previous_sku', $adopted_from);
+                error_log(sprintf('[ojf] adoção: produto #%d re-chaveado %s -> %s', $existing, $adopted_from, $sku));
+            }
         } else {
             // Guarda anti-duplicação (>= 1.0.36): se o SKU já é de uma variação
             // de um produto PUBLICADO, este payload é um `familyProduct` da
@@ -704,6 +848,7 @@ function ojf_create_product_handler($request) {
             'product_id'         => (int) $product_id,
             'sku'                => $sku,
             'created'            => !$existing,
+            'adopted_from_sku'   => $adopted_from !== '' && $adopted_from !== $sku ? $adopted_from : null,
             'variations_created' => $vcount,
             'execution_time_ms'  => (int) round((microtime(true) - $t0) * 1000),
             'api_version'        => OJF_BRIDGE_VERSION,

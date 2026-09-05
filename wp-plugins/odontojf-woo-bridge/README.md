@@ -1,4 +1,4 @@
-# OdontoJF Woo Bridge — v1.0.36
+# OdontoJF Woo Bridge — v1.0.56
 
 Plugin WordPress que recebe os produtos do Worker OdontoJF numa **fila própria** (com
 timing/retry), cria/atualiza no WooCommerce com **atributos manuais** (não globais),
@@ -139,6 +139,34 @@ lugar — nada é apagado nem recadastrado, e nenhum SKU muda**.
 O meta próprio (`_odontojf_variation_gallery`) continua sendo o registro canônico: ele
 funciona sem o CommerceKit, alimenta o campo do admin e é o que o PILAR B enxerga.
 `commercekit_image_gallery` é só o espelho de renderização.
+
+## Guarda anti-duplicação (1.0.56)
+
+O `_sku` do pai variável é **sintético**: `OD-<código da 1ª variação>`. A origem
+reordena e remove tamanhos, então esse código **muda sozinho** — e aí o `create` não
+achava o pai pelo SKU, o Woo criava um **segundo produto** e o `save()` de cada
+variação reescrevia o `post_parent` dela. O original ficava **vazio e publicado**.
+Aconteceu de verdade: `#773421` (`OD-19722`) → `#791839` (`OD-20591`), 12 variações.
+
+Antes de criar, `ojf_adopt_existing_product()` procura o produto que o payload **já é**:
+
+| ordem | âncora | como |
+|---|---|---|
+| 1 | slug da origem | `post_name` = slug, `post_status=publish`, `_seller=odontojf` |
+| 2 | dono das variações | `ojf_variation_owner_of_sku()` sobre os códigos do payload |
+
+Achando, **adota**: atualiza o produto existente e re-chaveia o `_sku` nele
+(`_ojf_previous_sku` guarda o antigo; a resposta traz `adopted_from_sku`).
+
+Recusa com **409** quando adotar seria destrutivo:
+
+- `variations_span_parents` — as variações do payload estão em mais de um pai publicado;
+- `adoption_overlap_too_low` — menos de 50% das variações vivas do candidato estão no
+  payload (o PILAR C apagaria as de fora).
+
+E de 1.0.36, ainda de pé: `sku_belongs_to_variation` — recusa criar um **produto
+simples** com um SKU que já é de uma variação viva (o `familyProduct` da origem
+entrando solto no pipeline).
 
 ## Empacotamento
 

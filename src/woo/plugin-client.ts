@@ -186,7 +186,16 @@ export async function pushProductToPlugin(
       parsed = { raw: text };
     }
     if (!res.ok) {
-      return { status: "failed", reason: `plugin HTTP ${res.status}`, httpStatus: res.status, response: parsed };
+      // Carrega o code/message do plugin no motivo: as recusas da guarda
+      // anti-duplicação (409) viram lista de revisão legível no D1.
+      const e = (parsed ?? {}) as Record<string, any>;
+      const detail = typeof e.code === "string" ? `${e.code}: ${String(e.message ?? "").slice(0, 300)}` : "";
+      return {
+        status: "failed",
+        reason: detail ? `plugin HTTP ${res.status} — ${detail}` : `plugin HTTP ${res.status}`,
+        httpStatus: res.status,
+        response: parsed,
+      };
     }
     const obj = (parsed ?? {}) as Record<string, any>;
     const queueId = typeof obj.queue_id === "number" ? obj.queue_id : obj.queue_id ? Number(obj.queue_id) : null;

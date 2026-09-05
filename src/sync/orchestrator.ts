@@ -342,12 +342,30 @@ async function runPushViaPlugin(
           queueStatus: st.status,
           productId: st.productId,
           durationMs: st.durationMs,
-          error: st.status === "failed" ? ((st.error as string) ?? "WP handler failed") : null,
+          error: st.status === "failed" ? pluginQueueError(st.error) : null,
         });
         return;
       }
     }
   }
+}
+
+/** O erro da fila do plugin pode vir como objeto (WP_Error serializado). Achata
+ *  para string legível — é ele que vira a lista de revisão das recusas 409. */
+function pluginQueueError(err: unknown): string {
+  if (typeof err === "string" && err.trim() !== "") return err;
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    const code = typeof o.code === "string" ? o.code : "";
+    const msg = typeof o.message === "string" ? o.message : "";
+    if (code || msg) return code && msg ? `${code}: ${msg}` : code || msg;
+    try {
+      return JSON.stringify(err).slice(0, 500);
+    } catch {
+      /* ignore */
+    }
+  }
+  return "WP handler failed";
 }
 
 /** Legacy path (`WOO_PUSH_MODE=wcrest`): write straight to core WooCommerce. */
@@ -419,7 +437,7 @@ export async function reconcileWooQueue(env: Env, limit: number): Promise<number
         queueStatus: st.status,
         productId: st.productId,
         durationMs: st.durationMs,
-        error: st.status === "failed" ? ((st.error as string) ?? "WP handler failed") : null,
+        error: st.status === "failed" ? pluginQueueError(st.error) : null,
       });
       settled++;
     } else if (st.status === "processing") {
