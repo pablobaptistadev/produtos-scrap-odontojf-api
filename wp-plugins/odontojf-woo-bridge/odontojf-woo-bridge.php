@@ -2,13 +2,16 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.38
+ * Version: 1.0.39
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.39 - PDP da variacao: titulo proprio no topo do bloco (e no H1), SKU do
+ *          pai trocado pelo da variacao selecionada, e preco reordenado para
+ *          ACIMA da descricao (flex order, sem sobrescrever template).
  *  1.0.38 - Faltava o hook que importa: WC_Product_Variation::get_title()
  *          devolve parent_data['title'] direto, sem passar por get_name(), e e
  *          por ele que a Store API e os templates leem o nome. Filtro
@@ -139,7 +142,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.38');
+define('OJF_BRIDGE_VERSION', '1.0.39');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
