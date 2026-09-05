@@ -150,7 +150,25 @@ function ojf_pp_assets() {
         // Transição dos campos que trocam.
       . '.ojf-pp-live{transition:opacity .2s cubic-bezier(.4,0,.2,1),transform .2s cubic-bezier(.4,0,.2,1);will-change:opacity,transform}'
       . '.ojf-pp-out{opacity:0;transform:translateY(-3px)}'
-      . '@media (prefers-reduced-motion:reduce){.ojf-pp-live{transition:none}.ojf-pp-out{opacity:1;transform:none}}';
+        // "Ler mais": a descrição da variação tem ~2.000 caracteres e empurrava
+        // o botão de compra para fora da tela. Colapsa com degradê e expande.
+      . '.ojf-clamp{position:relative;overflow:hidden;transition:max-height .45s cubic-bezier(.4,0,.2,1)}'
+      . '.ojf-clamp::after{content:"";position:absolute;left:0;right:0;bottom:0;height:110px;'
+      .   'pointer-events:none;opacity:1;transition:opacity .35s ease;'
+      .   'background:linear-gradient(to bottom,var(--ojf-fade-0,rgba(255,255,255,0)) 0%,'
+      .   'var(--ojf-fade-1,rgba(255,255,255,.9)) 62%,var(--ojf-fade-2,#fff) 100%)}'
+      . '.ojf-clamp.is-open::after{opacity:0}'
+      . '.ojf-more{order:4;display:flex;justify-content:center;margin:-6px 0 4px}'
+      . '.ojf-more button{appearance:none;background:transparent;border:0;cursor:pointer;padding:8px 14px;'
+      .   'font:inherit;font-weight:600;font-size:.92em;letter-spacing:.01em;color:currentColor;opacity:.85;'
+      .   'display:inline-flex;align-items:center;gap:7px;border-radius:999px;'
+      .   'transition:opacity .2s ease,background-color .2s ease}'
+      . '.ojf-more button:hover{opacity:1;background:rgba(0,0,0,.045)}'
+      . '.ojf-more button:focus-visible{outline:2px solid currentColor;outline-offset:2px}'
+      . '.ojf-more svg{width:14px;height:14px;transition:transform .35s cubic-bezier(.4,0,.2,1)}'
+      . '.ojf-more.is-open svg{transform:rotate(180deg)}'
+      . '@media (prefers-reduced-motion:reduce){.ojf-pp-live,.ojf-clamp,.ojf-more svg{transition:none}'
+      .   '.ojf-pp-out{opacity:1;transform:none}}';
 
     if (wp_style_is('woocommerce-general', 'registered')) {
         wp_add_inline_style('woocommerce-general', $css);
@@ -158,6 +176,7 @@ function ojf_pp_assets() {
         add_action('wp_head', function () use ($css) { echo '<style id="ojf-product-page">' . $css . '</style>'; });
     }
 
+    $clamp = (int) apply_filters('ojf_pp_description_max_height', 220);
     $cfg = wp_json_encode([
         'parentSku'  => $parent_sku,
         'dimUnit'    => get_option('woocommerce_dimension_unit'),
@@ -247,6 +266,78 @@ function ojf_pp_assets() {
       return \$('<div>').text(t == null ? '' : String(t)).html();
     }
 
+    /* ---- "Ler mais" na descrição da variação ---- */
+
+    var CLAMP_PX = {$clamp};
+
+    // O degradê precisa terminar na cor REAL do fundo, senão sobra uma faixa
+    // branca sobre fundo colorido. Sobe a árvore até achar um fundo opaco e
+    // devolve os três stops já montados — nada de cirurgia em string, porque
+    // getComputedStyle devolve ora "rgb(...)" ora "rgba(...)".
+    function fadeStops(el) {
+      var rgb = [255, 255, 255];
+      for (var n = el.parentNode; n && n.nodeType === 1; n = n.parentNode) {
+        var parts = (window.getComputedStyle(n).backgroundColor || '').match(/[\\d.]+/g);
+        if (!parts || parts.length < 3) continue;
+        var alpha = parts.length > 3 ? parseFloat(parts[3]) : 1;
+        if (alpha < 0.95) continue; // translúcido: o que vale é o que está atrás
+        rgb = [parts[0], parts[1], parts[2]];
+        break;
+      }
+      var base = rgb.join(',');
+      return {
+        clear: 'rgba(' + base + ',0)',
+        soft:  'rgba(' + base + ',0.9)',
+        solid: 'rgba(' + base + ',1)'
+      };
+    }
+
+    function clampDescription() {
+      var el = \$form.find('.woocommerce-variation-description').first()[0];
+      if (!el) return;
+      \$('.ojf-more').remove();
+      el.classList.remove('ojf-clamp', 'is-open');
+      el.style.maxHeight = '';
+
+      // Só colapsa se realmente sobrar conteúdo — senão o botão seria ruído.
+      if (el.scrollHeight <= CLAMP_PX + 60) return;
+
+      var stops = fadeStops(el);
+      el.style.setProperty('--ojf-fade-0', stops.clear);
+      el.style.setProperty('--ojf-fade-1', stops.soft);
+      el.style.setProperty('--ojf-fade-2', stops.solid);
+
+      el.classList.add('ojf-clamp');
+      el.style.maxHeight = CLAMP_PX + 'px';
+
+      var chev = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" '
+               + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+      var \$more = \$('<div class="ojf-more"><button type="button" aria-expanded="false">'
+                    + '<span>Ler mais</span>' + chev + '</button></div>');
+      \$(el).after(\$more);
+
+      \$more.on('click', 'button', function () {
+        var open = el.classList.toggle('is-open');
+        \$more.toggleClass('is-open', open);
+        \$(this).attr('aria-expanded', open ? 'true' : 'false')
+               .find('span').text(open ? 'Ler menos' : 'Ler mais');
+
+        if (open) {
+          // Anima até a altura real e depois solta, para o conteúdo poder
+          // crescer (imagem que carrega, etc.) sem ficar cortado.
+          el.style.maxHeight = el.scrollHeight + 'px';
+          \$(el).one('transitionend', function () {
+            if (el.classList.contains('is-open')) el.style.maxHeight = 'none';
+          });
+        } else {
+          el.style.maxHeight = el.scrollHeight + 'px';
+          void el.offsetHeight; // força reflow para a transição de volta rodar
+          el.style.maxHeight = CLAMP_PX + 'px';
+          \$('html, body').animate({ scrollTop: \$(el).offset().top - 120 }, 260);
+        }
+      });
+    }
+
     /* ---- eventos ---- */
 
     // show_variation dispara DEPOIS de o core reescrever o .single_variation,
@@ -258,6 +349,8 @@ function ojf_pp_assets() {
       if (wrap.length && variation.ojf_variation_title) {
         wrap.prepend('<div class="ojf-variation-title">' + esc(variation.ojf_variation_title) + '</div>');
       }
+
+      clampDescription();
 
       animate(function () {
         if (variation.ojf_variation_title) setHtml('title', esc(variation.ojf_variation_title));
