@@ -272,88 +272,9 @@ JS;
 
     wp_add_inline_script('wc-add-to-cart-variation', $js);
 
-    // Título próprio, SKU da variação e preço acima da descrição (>= 1.0.39).
-    // Em wp_enqueue_scripts o $product global ainda não foi montado (isso
-    // acontece no loop), então pega pelo objeto consultado.
-    $current = wc_get_product(get_queried_object_id());
-    $parent_sku = ($current instanceof WC_Product) ? (string) $current->get_sku() : '';
-
-    // Handle do CSS do WooCommerce; se o tema tiver desregistrado, imprime solto.
-    $css_handle = wp_style_is('woocommerce-general', 'registered') ? 'woocommerce-general' : '';
-    $css =
-        // O template do core (single-product/add-to-cart/variation.php) imprime
-        // descrição -> preço -> disponibilidade. Reordenar por flex evita
-        // sobrescrever template e sobrevive ao re-render a cada seleção.
-        '.woocommerce-variation.single_variation{display:flex;flex-direction:column}'
-      . '.ojf-variation-title{order:0;font-weight:600;line-height:1.3;margin:0 0 8px}'
-      . '.woocommerce-variation-price{order:1}'
-      . '.woocommerce-variation-availability{order:2}'
-      . '.woocommerce-variation-description{order:3;margin-top:12px}';
-    if ($css_handle !== '') {
-        wp_add_inline_style($css_handle, $css);
-    } else {
-        add_action('wp_head', function () use ($css) { echo '<style id="ojf-variation-order">' . $css . '</style>'; });
-    }
-
-    $cfg = wp_json_encode(['parentSku' => $parent_sku]);
-    $js2 = <<<JS
-(function (\$) {
-  'use strict';
-  if (!\$) return;
-  var CFG = {$cfg};
-
-  \$(function () {
-    var \$form = \$('.variations_form').first();
-    if (!\$form.length) return;
-
-    // H1 do tema (Elementor não usa .product_title).
-    var \$h1 = \$('h1.elementor-heading-title, h1.product_title').first();
-    var \$h1Text = \$h1.find('a').length ? \$h1.find('a').first() : \$h1;
-    var h1Original = \$h1Text.length ? \$h1Text.text() : null;
-
-    // Todo elemento que hoje mostra o SKU do PAI. Guarda o HTML original e
-    // troca só a ocorrência do código, preservando rótulo e marcação.
-    var skuNodes = [];
-    if (CFG.parentSku) {
-      \$('.jet-listing-dynamic-field__content, .woocommerce-product-attributes-item__value, .sku, .sku_wrapper').each(function () {
-        var \$n = \$(this);
-        if (\$n.children().length > 2) return;
-        if (\$n.text().indexOf(CFG.parentSku) === -1) return;
-        skuNodes.push({ el: \$n, html: \$n.html() });
-      });
-    }
-
-    function setSku(value) {
-      skuNodes.forEach(function (n) {
-        n.el.html(value ? n.html.split(CFG.parentSku).join(value) : n.html);
-      });
-    }
-
-    function esc(t) {
-      return \$('<div>').text(t == null ? '' : String(t)).html();
-    }
-
-    // show_variation dispara DEPOIS de o core reescrever o .single_variation,
-    // então o título injetado aqui nunca duplica.
-    \$form.on('show_variation.ojfTitle', function (event, variation) {
-      var wrap = \$form.find('.woocommerce-variation.single_variation').first();
-      if (wrap.length && variation && variation.ojf_variation_title) {
-        wrap.prepend('<div class="ojf-variation-title">' + esc(variation.ojf_variation_title) + '</div>');
-      }
-      if (variation && variation.ojf_variation_title && \$h1Text.length) {
-        \$h1Text.text(variation.ojf_variation_title);
-      }
-      if (variation && variation.sku) setSku(String(variation.sku));
-    });
-
-    \$form.on('reset_data.ojfTitle', function () {
-      if (h1Original !== null && \$h1Text.length) \$h1Text.text(h1Original);
-      setSku(null);
-    });
-  });
-})(window.jQuery);
-JS;
-    wp_add_inline_script('wc-add-to-cart-variation', $js2);
+    // A troca de título/SKU/preço e a reordenação do bloco vivem em
+    // includes/product-page.php (>= 1.0.40) — um único script dono dos campos
+    // que seguem a variação, para os dois não brigarem pelos mesmos elementos.
 }
 
 /* ── ADMIN ────────────────────────────────────────────────────────────────── */

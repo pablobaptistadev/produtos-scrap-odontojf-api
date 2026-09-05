@@ -2,13 +2,16 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.39
+ * Version: 1.0.40
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.40 - Modulo product-page: titulo, SKU, preco, peso e dimensoes passam a
+ *          seguir a variacao selecionada, com transicao. Incorpora o snippet
+ *          [producto_info] (mesmo shortcode e mesmos atributos) ao plugin.
  *  1.0.39 - PDP da variacao: titulo proprio no topo do bloco (e no H1), SKU do
  *          pai trocado pelo da variacao selecionada, e preco reordenado para
  *          ACIMA da descricao (flex order, sem sobrescrever template).
@@ -142,7 +145,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.39');
+define('OJF_BRIDGE_VERSION', '1.0.40');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
@@ -161,6 +164,7 @@ require_once OJF_BRIDGE_DIR . 'includes/api-queue.php';       // interceptor + f
 require_once OJF_BRIDGE_DIR . 'includes/image-dashboard.php'; // dashboard da fila de imagens (verbatim)
 require_once OJF_BRIDGE_DIR . 'includes/media-r2.php';        // mídia R2: auto-upload + migrar (núcleo, religado ao ojf_r2_*)
 require_once OJF_BRIDGE_DIR . 'includes/variation-gallery.php'; // galeria por variação (front + admin) — _odontojf_variation_gallery
+require_once OJF_BRIDGE_DIR . 'includes/product-page.php';     // PDP: título/SKU/preço/peso/dimensões seguem a variação + [producto_info]
 if (is_admin()) {
     require_once OJF_BRIDGE_DIR . 'includes/settings.php';    // página ÚNICA de configurações (todas as chaves)
     require_once OJF_BRIDGE_DIR . 'includes/media-r2-admin.php'; // biblioteca: coluna/filtro/grid + upload /assets/ (cinza)
