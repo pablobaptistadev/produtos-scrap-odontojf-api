@@ -85,7 +85,7 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
         $this->add_control('texto_sucesso', array(
             'label' => esc_html__('Texto ao concluir', 'odontojf'),
             'type' => \Elementor\Controls_Manager::TEXT,
-            'default' => esc_html__('Adicionado ao carrinho', 'odontojf'),
+            'default' => esc_html__('Carrinho atualizado', 'odontojf'),
             'condition' => array('ajax' => 'yes'),
         ));
 
@@ -100,6 +100,13 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
             'label' => esc_html__('Texto', 'odontojf'),
             'type' => \Elementor\Controls_Manager::TEXT,
             'placeholder' => esc_html__('Deixe vazio para manter o texto do WooCommerce', 'odontojf'),
+        ));
+
+        $this->add_control('preselecionar', array(
+            'label' => esc_html__('Pré-selecionar uma variação', 'odontojf'),
+            'description' => esc_html__('Ao abrir a página, já marca a primeira variação em estoque — preferindo uma que esteja em oferta. Se a URL já trouxer uma variação, ela é respeitada.', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SWITCHER,
+            'default' => 'yes',
         ));
 
         $this->add_control('qty_custom', array(
@@ -165,6 +172,18 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
                 // flex-basis 0 para a proporção valer de verdade: com basis
                 // auto o botão reservaria a largura do próprio texto antes.
                 $btn => 'flex: 1 1 0 !important; width: auto !important; min-width: 0 !important;',
+            ),
+        ));
+
+        $this->add_responsive_control('espaco_linha', array(
+            'label' => esc_html__('Espaço entre quantidade e botão', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SLIDER,
+            'range' => array('px' => array('min' => 0, 'max' => 40)),
+            'default' => array('size' => 0, 'unit' => 'px'),
+            'condition' => array('layout_lado_a_lado' => 'yes'),
+            'selectors' => array(
+                '{{WRAPPER}} .ojf-atc form.cart .woocommerce-variation-add-to-cart, {{WRAPPER}} .ojf-atc form.cart:not(.variations_form)'
+                    => 'gap: {{SIZE}}{{UNIT}} !important;',
             ),
         ));
 
@@ -528,12 +547,20 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
         if ($settings['ocultar_preco_variacao'] === 'yes')    $classes[] = 'ojf-atc--sem-preco';
         if ($settings['ocultar_descricao_variacao'] === 'yes') $classes[] = 'ojf-atc--sem-descricao';
         if ($settings['ajax'] === 'yes')                       $classes[] = 'ojf-atc--ajax';
+        if ($settings['layout_lado_a_lado'] === 'yes')         $classes[] = 'ojf-atc--lado';
+
+        $preselect = '';
+        if ($settings['preselecionar'] === 'yes') {
+            $attrs = $this->melhorVariacao($product);
+            if ($attrs) $preselect = wp_json_encode($attrs);
+        }
 
         printf(
-            '<div class="%s" data-loading="%s" data-done="%s">',
+            '<div class="%s" data-loading="%s" data-done="%s"%s>',
             esc_attr(implode(' ', $classes)),
             esc_attr($settings['texto_carregando']),
-            esc_attr($settings['texto_sucesso'])
+            esc_attr($settings['texto_sucesso']),
+            $preselect !== '' ? ' data-preselect="' . esc_attr($preselect) . '"' : ''
         );
 
         // Captura a saída do template do Woo para poder mexer no botão. O
@@ -576,6 +603,32 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
 
             return $m[1] . $conteudo . $m[3];
         }, $html, 1);
+    }
+
+    /**
+     * Atributos da variação que deve vir marcada ao abrir a página.
+     *
+     * Prioridade: em estoque E em oferta > em estoque > nenhuma. Um produto que
+     * abre sem nada selecionado mostra a faixa de preço do pai (que nesta loja
+     * começa em R$ 0,00 quando alguma variação não tem preço) e obriga um
+     * clique a mais antes de poder comprar.
+     *
+     * @return array|null mapa attribute_x => valor
+     */
+    private function melhorVariacao($product) {
+        if (!$product->is_type('variable')) return null;
+
+        $em_estoque = null;
+        foreach ($product->get_available_variations() as $v) {
+            if (empty($v['variation_id'])) continue;
+            $vo = wc_get_product($v['variation_id']);
+            if (!$vo || !$vo->is_in_stock() || !$vo->is_purchasable()) continue;
+
+            if ($em_estoque === null) $em_estoque = $v['attributes'];
+            if ($vo->is_on_sale()) return $v['attributes']; // em estoque E em oferta
+        }
+
+        return $em_estoque;
     }
 
     /**

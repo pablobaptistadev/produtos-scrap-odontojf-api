@@ -2,13 +2,19 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.52
+ * Version: 1.0.54
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.54 - Pre-selecao de variacao ao abrir a pagina: a primeira em estoque,
+ *          preferindo uma em oferta. A variacao que vier na URL sempre vence.
+ *  1.0.53 - Sucesso do carrinho: "Carrinho atualizado", UM icone so (o .added
+ *          do tema trazia um segundo) e volta ao padrao em 5s. Gap 0 entre
+ *          quantidade e botao, com controle. Troca de SKU passa a achar
+ *          tambem o codigo do ERP, nao so o _sku.
  *  1.0.52 - FIX CRITICO: adicionar ao carrinho levava ~21s com o ERP fora do
  *          ar (duas consultas pagando o timeout inteiro). Disjuntor: apos uma
  *          falha o ERP fica marcado como fora por 120s e as consultas voltam
@@ -183,7 +189,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.52');
+define('OJF_BRIDGE_VERSION', '1.0.54');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

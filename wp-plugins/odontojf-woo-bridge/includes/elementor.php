@@ -66,6 +66,17 @@ function ojf_atc_assets() {
       . '.ojf-atc .ojf-qty--fixa{display:none!important}'
         // O tema flutua o .quantity à esquerda; num container flex isso atrapalha.
       . '.ojf-atc form.cart .quantity{float:none!important;margin:0!important}'
+        // Modo "quantidade ao lado do botão": a linha precisa ser flex de fato,
+        // senão as proporções não valem. gap 0 por padrão — espaçamento é
+        // controle do widget.
+      . '.ojf-atc--lado form.cart .woocommerce-variation-add-to-cart,'
+      .   '.ojf-atc--lado form.cart:not(.variations_form){display:flex!important;'
+      .   'align-items:stretch;flex-wrap:nowrap;gap:0}'
+        // Estado de sucesso: só o NOSSO ícone. O Woo e o tema injetam .added e
+        // um indicador próprio no botão, e apareciam dois.
+      . '.ojf-atc .single_add_to_cart_button.ojf-atc-done > *:not(.ojf-atc-state){display:none!important}'
+      . '.ojf-atc .single_add_to_cart_button.ojf-atc-done::after,'
+      .   '.ojf-atc .single_add_to_cart_button.ojf-atc-done::before{display:none!important;content:none!important}'
       . '.ojf-atc--sem-preco .woocommerce-variation-price{display:none!important}'
       . '.ojf-atc--sem-descricao .woocommerce-variation-description{display:none!important}'
         // Estado de carregando: o botão NÃO muda de cor nem de tamanho — só o
@@ -122,6 +133,48 @@ function ojf_atc_assets() {
   function state(\$btn, html) {
     \$btn.html('<span class="ojf-atc-state">' + html + '</span>');
   }
+
+  /* ---- pré-seleção da variação ---- */
+
+  // Sem seleção o produto abre mostrando a faixa do pai (que aqui começa em
+  // R$ 0,00 quando alguma variação está sem preço) e exige um clique a mais.
+  // O que veio na URL sempre vence: link compartilhado não pode ser
+  // sobrescrito.
+  function preSelecionar() {
+    \$('.ojf-atc[data-preselect]').each(function () {
+      var \$box = \$(this);
+      var \$form = \$box.find('form.variations_form').first();
+      if (!\$form.length || \$form.data('ojfPreSel')) return;
+
+      var attrs;
+      try { attrs = JSON.parse(\$box.attr('data-preselect')); } catch (e) { return; }
+      if (!attrs) return;
+
+      var jaSelecionado = false;
+      \$form.find('select[name^="attribute_"]').each(function () {
+        if (\$(this).val()) jaSelecionado = true;
+      });
+      if (jaSelecionado) { \$form.data('ojfPreSel', 1); return; }
+
+      \$form.data('ojfPreSel', 1);
+
+      Object.keys(attrs).forEach(function (nome) {
+        var valor = attrs[nome];
+        if (!valor) return;
+
+        // Prefere clicar na swatch do CommerceKit: é ela que mantém o estado
+        // visual. Mexer só no <select> deixaria o botão certo sem destaque.
+        var \$sw = \$form.find('.cgkit-attribute-swatches[data-attribute="' + nome + '"] button[data-attribute-value="' + valor.replace(/"/g, '\\"') + '"]').first();
+        if (\$sw.length) { \$sw.trigger('click'); return; }
+
+        \$form.find('select[name="' + nome + '"]').val(valor).trigger('change');
+      });
+    });
+  }
+
+  // Depois do wc_variation_form montar as swatches. Duas tentativas: em lojas
+  // com muitos scripts o CommerceKit às vezes só termina depois do ready.
+  \$(function () { setTimeout(preSelecionar, 250); setTimeout(preSelecionar, 1200); });
 
   /* ---- quantidade: − e + ---- */
 
@@ -191,7 +244,7 @@ function ojf_atc_assets() {
     if (!(qty > 0)) qty = 1;
 
     function restaura() {
-      \$btn.removeClass('ojf-atc-busy').removeAttr('aria-busy')
+      \$btn.removeClass('ojf-atc-busy ojf-atc-done added').removeAttr('aria-busy')
           .css({ minWidth: '', minHeight: '' }).html(original);
     }
 
@@ -209,8 +262,11 @@ function ojf_atc_assets() {
         // O estado de sucesso vem ANTES de disparar added_to_cart: esse evento
         // é ouvido pelo tema e por outros plugins, e um deles estourando aqui
         // abortava o resto deste callback — o botão ficava girando sem fim.
-        state(\$btn, CHECK + '<span>' + (\$box.data('done') || 'Adicionado ao carrinho') + '</span>');
-        setTimeout(restaura, 2200);
+        // .added vem do Woo/tema com indicador próprio; com o nosso check dava
+        // dois ícones. Sai enquanto o estado for nosso.
+        \$btn.removeClass('added').addClass('ojf-atc-done');
+        state(\$btn, CHECK + '<span>' + (\$box.data('done') || 'Carrinho atualizado') + '</span>');
+        setTimeout(restaura, 5000);
 
         try {
           \$(document.body).trigger('added_to_cart', [res && res.fragments, res && res.cart_hash, \$btn]);

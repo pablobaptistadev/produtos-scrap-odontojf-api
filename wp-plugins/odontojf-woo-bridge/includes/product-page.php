@@ -272,8 +272,21 @@ function ojf_pp_assets() {
     }
 
     $clamp = (int) apply_filters('ojf_pp_description_max_height', 220);
+    // Nem sempre o que a página mostra como "SKU" é o _sku: nesta loja um campo
+    // do JetEngine exibe o código do ERP. Mandamos todos os códigos que
+    // representam o pai para o JS conseguir achar e trocar qualquer um deles.
+    $parent_codes = array($parent_sku);
+    if ($current instanceof WC_Product) {
+        foreach (array('_ojf_erp_code', '_odontojf_sku', '_odontojf_barcode') as $meta) {
+            $v = $current->get_meta($meta, true);
+            if (is_string($v) && trim($v) !== '') $parent_codes[] = trim($v);
+        }
+    }
+    $parent_codes = array_values(array_unique(array_filter($parent_codes)));
+
     $cfg = wp_json_encode([
-        'parentSku'  => $parent_sku,
+        'parentSku'   => $parent_sku,
+        'parentCodes' => $parent_codes,
         'dimUnit'    => get_option('woocommerce_dimension_unit'),
         'weightUnit' => get_option('woocommerce_weight_unit'),
     ]);
@@ -322,13 +335,20 @@ function ojf_pp_assets() {
     // JetEngine, tabela de atributos). Em vez de adivinhar a marcação, guarda
     // o HTML e troca só a ocorrência do código — rótulo e formatação sobrevivem.
     var skuNodes = [];
-    if (CFG.parentSku) {
+    var codigos = (CFG.parentCodes || [CFG.parentSku]).filter(function (c) {
+      return c && String(c).length > 1;
+    });
+    if (codigos.length) {
       \$('.jet-listing-dynamic-field__content, .woocommerce-product-attributes-item__value, .sku, .sku_wrapper').each(function () {
         var \$n = \$(this);
         if (\$n.children().length > 2) return;
-        if (\$n.text().indexOf(CFG.parentSku) === -1) return;
+        var texto = \$n.text(), achado = null;
+        for (var i = 0; i < codigos.length; i++) {
+          if (texto.indexOf(codigos[i]) !== -1) { achado = codigos[i]; break; }
+        }
+        if (!achado) return;
         \$n.addClass('ojf-pp-live');
-        skuNodes.push({ el: \$n, html: \$n.html() });
+        skuNodes.push({ el: \$n, html: \$n.html(), code: achado });
       });
     }
 
@@ -461,7 +481,7 @@ function ojf_pp_assets() {
         if (variation.sku) {
           setHtml('sku', esc(variation.sku));
           skuNodes.forEach(function (n) {
-            n.el.html(n.html.split(CFG.parentSku).join(esc(variation.sku)));
+            n.el.html(n.html.split(n.code).join(esc(variation.sku)));
           });
         }
       });
