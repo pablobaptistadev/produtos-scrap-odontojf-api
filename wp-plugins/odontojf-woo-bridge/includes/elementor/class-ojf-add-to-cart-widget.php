@@ -268,6 +268,123 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
         $this->end_controls_tabs();
 
         $this->end_controls_section();
+
+        /* ── Variações (swatches do CommerceKit) ── */
+        $this->start_controls_section('secao_estilo_swatches', array(
+            'label' => esc_html__('Seletor de variação', 'odontojf'),
+            'tab' => \Elementor\Controls_Manager::TAB_STYLE,
+        ));
+
+        // As swatches são renderizadas pelo CommerceKit DENTRO do form.cart,
+        // portanto dentro deste widget — por isso {{WRAPPER}} alcança. Como o
+        // CSS do CommerceKit é específico, os valores saem com !important.
+        $sw     = '{{WRAPPER}} .ojf-atc .cgkit-attribute-swatch.cgkit-button button';
+        $sw_sel = $sw . '.cgkit-swatch-selected';
+
+        $this->add_control('corrigir_swatch', array(
+            'label' => esc_html__('Corrigir o tamanho dos botões', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SWITCHER,
+            'default' => '',
+            'description' => esc_html__('O CommerceKit fixa min-width 47px, min-height 43px e line-height 43px, o que corta rótulos maiores (N°18R). Ligado, o botão passa a se ajustar ao texto.', 'odontojf'),
+            'selectors' => array(
+                $sw => 'display:inline-flex!important;align-items:center;justify-content:center;'
+                     . 'min-width:0!important;min-height:0!important;height:auto!important;'
+                     . 'line-height:1.2!important;padding:9px 13px!important;white-space:nowrap;',
+            ),
+        ));
+
+        $this->add_responsive_control('espaco_swatch', array(
+            'label' => esc_html__('Espaço entre eles', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SLIDER,
+            'range' => array('px' => array('min' => 0, 'max' => 30)),
+            'selectors' => array(
+                '{{WRAPPER}} .ojf-atc .cgkit-attribute-swatches' => 'display:flex;flex-wrap:wrap;gap:{{SIZE}}{{UNIT}};',
+            ),
+        ));
+
+        $this->add_group_control(\Elementor\Group_Control_Typography::get_type(), array(
+            'name' => 'tipografia_swatch',
+            'selector' => $sw,
+        ));
+
+        $this->add_responsive_control('padding_swatch', array(
+            'label' => esc_html__('Espaçamento interno', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::DIMENSIONS,
+            'size_units' => array('px', 'em'),
+            'selectors' => array($sw => 'padding: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}} !important;'),
+        ));
+
+        $this->add_responsive_control('raio_swatch', array(
+            'label' => esc_html__('Arredondamento', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::DIMENSIONS,
+            'size_units' => array('px', '%'),
+            'selectors' => array($sw => 'border-radius: {{TOP}}{{UNIT}} {{RIGHT}}{{UNIT}} {{BOTTOM}}{{UNIT}} {{LEFT}}{{UNIT}} !important;'),
+        ));
+
+        $this->add_control('titulo_swatch_cor', array(
+            'label' => esc_html__('Cor do rótulo (ex.: "variacao:")', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array('{{WRAPPER}} .ojf-atc .cgkit-swatch-title' => 'color: {{VALUE}} !important;'),
+        ));
+
+        $this->start_controls_tabs('abas_swatch');
+
+        $this->start_controls_tab('aba_sw_normal', array('label' => esc_html__('Normal', 'odontojf')));
+        $this->add_control('sw_cor', array(
+            'label' => esc_html__('Texto', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw => 'color: {{VALUE}} !important;'),
+        ));
+        $this->add_control('sw_fundo', array(
+            'label' => esc_html__('Fundo', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw => 'background: {{VALUE}} !important;'),
+        ));
+        $this->add_control('sw_borda', array(
+            'label' => esc_html__('Borda', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw => 'border-color: {{VALUE}} !important;'),
+        ));
+        $this->end_controls_tab();
+
+        $this->start_controls_tab('aba_sw_hover', array('label' => esc_html__('Hover', 'odontojf')));
+        $this->add_control('sw_cor_hover', array(
+            'label' => esc_html__('Texto', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw . ':hover' => 'color: {{VALUE}} !important;'),
+        ));
+        $this->add_control('sw_fundo_hover', array(
+            'label' => esc_html__('Fundo', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw . ':hover' => 'background: {{VALUE}} !important;'),
+        ));
+        $this->add_control('sw_borda_hover', array(
+            'label' => esc_html__('Borda', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw . ':hover' => 'border-color: {{VALUE}} !important;'),
+        ));
+        $this->end_controls_tab();
+
+        $this->start_controls_tab('aba_sw_sel', array('label' => esc_html__('Selecionado', 'odontojf')));
+        $this->add_control('sw_cor_sel', array(
+            'label' => esc_html__('Texto', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw_sel => 'color: {{VALUE}} !important;'),
+        ));
+        $this->add_control('sw_fundo_sel', array(
+            'label' => esc_html__('Fundo', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw_sel => 'background: {{VALUE}} !important;'),
+        ));
+        $this->add_control('sw_borda_sel', array(
+            'label' => esc_html__('Borda', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array($sw_sel => 'border-color: {{VALUE}} !important;'),
+        ));
+        $this->end_controls_tab();
+
+        $this->end_controls_tabs();
+        $this->end_controls_section();
     }
 
     protected function render() {
