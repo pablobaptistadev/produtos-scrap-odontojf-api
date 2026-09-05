@@ -33,7 +33,16 @@ function ojf_atc_assets() {
     $css =
         // O bloco de variação do WooCommerce repete preço e descrição; a página
         // já mostra ambos. Escondido por opção do widget, nunca por padrão global.
-        '.ojf-atc--sem-preco .woocommerce-variation-price{display:none!important}'
+        // Layout base do botão: o tema não previa ícone dentro dele, então o
+        // conteúdo é centralizado por flex aqui. É a única regra de aparência
+        // que entra sem o lojista pedir — o resto vem dos controles do widget.
+        '.ojf-atc form.cart .single_add_to_cart_button{display:inline-flex!important;'
+      .   'align-items:center;justify-content:center;gap:10px;line-height:1.2;text-align:center}'
+      . '.ojf-atc .ojf-atc-ico{display:inline-flex;align-items:center;flex:0 0 auto}'
+      . '.ojf-atc .ojf-atc-ico svg{width:18px;height:18px;display:block;fill:currentColor}'
+      . '.ojf-atc .ojf-atc-ico i{line-height:1}'
+      . '.ojf-atc .ojf-atc-label{display:inline-block}'
+      . '.ojf-atc--sem-preco .woocommerce-variation-price{display:none!important}'
       . '.ojf-atc--sem-descricao .woocommerce-variation-description{display:none!important}'
         // Estado de carregando: o botão NÃO muda de cor nem de tamanho — só o
         // conteúdo é trocado, com a largura travada antes da troca para a linha
