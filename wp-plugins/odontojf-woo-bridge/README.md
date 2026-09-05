@@ -140,33 +140,51 @@ O meta próprio (`_odontojf_variation_gallery`) continua sendo o registro canôn
 funciona sem o CommerceKit, alimenta o campo do admin e é o que o PILAR B enxerga.
 `commercekit_image_gallery` é só o espelho de renderização.
 
-## Guarda anti-duplicação (1.0.56)
+## Identidade do produto = slug da origem (1.0.56)
 
 O `_sku` do pai variável é **sintético**: `OD-<código da 1ª variação>`. A origem
 reordena e remove tamanhos, então esse código **muda sozinho** — e aí o `create` não
 achava o pai pelo SKU, o Woo criava um **segundo produto** e o `save()` de cada
-variação reescrevia o `post_parent` dela. O original ficava **vazio e publicado**.
-Aconteceu de verdade: `#773421` (`OD-19722`) → `#791839` (`OD-20591`), 12 variações.
+variação reescrevia o `post_parent` dela (`ojf_sync_variations` casa a variação por
+SKU e chama `set_parent_id()`). O original ficava **publicado e vazio**. Aconteceu de
+verdade: `#773421` (`OD-19722`) → `#791839` (`OD-20591`), 12 variações.
 
-Antes de criar, `ojf_adopt_existing_product()` procura o produto que o payload **já é**:
+O slug é a chave estável — é a URL da origem, e é a URL que o cliente e o Google têm.
+`ojf_resolve_target_product()` decide o alvo assim:
 
-| ordem | âncora | como |
-|---|---|---|
-| 1 | slug da origem | `post_name` = slug, `post_status=publish`, `_seller=odontojf` |
-| 2 | dono das variações | `ojf_variation_owner_of_sku()` sobre os códigos do payload |
+| caso | slug acha | sku acha | resultado |
+|---|---|---|---|
+| 1 | — / mesmo | sim | update normal (`matched_by: sku`) |
+| 2 | **#A** | **#B** | **duplicata**: canônico = #A; #B vira gêmeo |
+| 3 | #A | — | adota #A e re-chaveia o `_sku` nele |
+| 4 | — | — | dono atual das variações; senão cria |
 
-Achando, **adota**: atualiza o produto existente e re-chaveia o `_sku` nele
-(`_ojf_previous_sku` guarda o antigo; a resposta traz `adopted_from_sku`).
+A busca por slug exige `post_name` = slug, publicado e `_seller = odontojf` — produto
+cadastrado à mão nunca é adotado. Ao adotar, o `_sku` antigo fica em
+`_ojf_previous_sku` e a resposta traz `adopted_from_sku` e `matched_by`.
 
-Recusa com **409** quando adotar seria destrutivo:
+### Como a duplicata é absorvida (caso 2)
 
-- `variations_span_parents` — as variações do payload estão em mais de um pai publicado;
-- `adoption_overlap_too_low` — menos de 50% das variações vivas do candidato estão no
-  payload (o PILAR C apagaria as de fora).
+1. o canônico (do slug) é atualizado e recebe o `_sku` do payload —
+   `ojf_release_sku_from_product()` solta o código do gêmeo **zerando o `_sku`**, sem
+   apagar nada (`ojf_free_sku_global()` faz `wp_delete_post(.., true)`, e isso levaria
+   os anexos e os objetos no R2 junto pelo hook `delete_attachment`);
+2. `ojf_sync_variations()` casa cada variação por SKU e chama `set_parent_id()` — as
+   variações **voltam sozinhas** para o canônico;
+3. só então `ojf_absorb_duplicate()` roda: se o gêmeo ficou sem nenhuma variação, vira
+   **rascunho** com `_ojf_duplicate_of` e `_ojf_duplicate_at`. Se sobrou alguma, ele
+   fica publicado e a resposta diz isso em `duplicate_absorbed`.
 
-E de 1.0.36, ainda de pé: `sku_belongs_to_variation` — recusa criar um **produto
-simples** com um SKU que já é de uma variação viva (o `familyProduct` da origem
-entrando solto no pipeline).
+**Nunca apaga.** Sai do ar, é reversível, e sobra rastro.
+
+### Recusas (409)
+
+| código | quando |
+|---|---|
+| `duplicate_products` | o gêmeo não é nosso, ou tem variação que não está no payload |
+| `variations_span_parents` | as variações do payload vivem sob mais de um pai publicado |
+| `adoption_overlap_too_low` | menos de 50% das variações vivas do candidato estão no payload (o PILAR C apagaria o resto) |
+| `sku_belongs_to_variation` | (1.0.36) criar produto **simples** com SKU que já é de uma variação viva |
 
 ## Empacotamento
 

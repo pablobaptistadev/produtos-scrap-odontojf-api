@@ -9,18 +9,21 @@
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
- *  1.0.56 - GUARDA ANTI-DUPLICACAO: o _sku do pai variavel e sintetico
- *          (OD-<codigo da 1a variacao>) e a origem reordena/remove tamanhos, entao
- *          esse codigo muda sozinho. Quando muda, o create nao achava o pai, o Woo
- *          criava um SEGUNDO produto e o save das variacoes reescrevia o
- *          post_parent delas — o original ficava vazio e publicado (#773421
- *          OD-19722 -> #791839 OD-20591, 12 variacoes). Agora, antes de criar, o
- *          handler procura o produto pelo SLUG da origem (so produtos nossos,
- *          _seller=odontojf) e, se nao achar, pelo dono atual das variacoes do
- *          payload; achando, ADOTA e re-chaveia o _sku no lugar. Recusa com 409
- *          quando adotar seria destrutivo: variacoes espalhadas por mais de um pai
- *          publicado, ou sobreposicao < 50% com as variacoes vivas do candidato
- *          (o PILAR C apagaria as de fora).
+ *  1.0.56 - IDENTIDADE DO PRODUTO PASSA A SER O SLUG DA ORIGEM. O _sku do pai
+ *          variavel e sintetico (OD-<codigo da 1a variacao>) e a origem reordena e
+ *          remove tamanhos, entao esse codigo muda sozinho. Quando mudava, o create
+ *          nao achava o pai, o Woo criava um SEGUNDO produto e o save de cada
+ *          variacao reescrevia o post_parent dela — o original ficava publicado e
+ *          VAZIO (#773421 OD-19722 -> #791839 OD-20591, 12 variacoes).
+ *          ojf_resolve_target_product() agora casa por slug (post_name, publicado,
+ *          _seller=odontojf) e, sem slug, pelo dono atual das variacoes; achando,
+ *          ADOTA e re-chaveia o _sku no lugar. Quando slug e sku apontam para
+ *          produtos DIFERENTES (duplicata ja existente), o do slug vence — o sync
+ *          puxa as variacoes de volta e o gemeo e despublicado (rascunho,
+ *          _ojf_duplicate_of). Nunca apaga: wp_delete_post levaria os anexos e os
+ *          objetos no R2 junto. Recusa com 409 quando absorver seria destrutivo:
+ *          variacoes espalhadas por mais de um pai, gemeo que nao e nosso, gemeo
+ *          com variacoes fora do payload, ou sobreposicao < 50% com o candidato.
  *  1.0.55 - FIX: a pagina tem DUAS form.variations_form (a do tema e a do nosso
  *          widget) e o script prendia em .first(), a errada — por isso SKU,
  *          "Ler mais" e URL nao reagiam. Eventos agora sao delegados e valem

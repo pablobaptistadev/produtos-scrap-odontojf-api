@@ -281,32 +281,113 @@ function ojf_parent_variation_codes($parent_id) {
 }
 
 /**
- * Acha o produto que este payload JÁ É, quando o _sku não bate (>= 1.0.56).
+ * Solta um SKU de quem o segura, SEM apagar nada (>= 1.0.56).
  *
- * O _sku do pai variável é sintético — `OD-<código da 1ª variação>` — e a origem
- * reordena/remove tamanhos, então esse código muda sozinho. Quando muda, o create
- * não acha o pai pelo SKU, o Woo cria um SEGUNDO produto e o save das variações
- * reescreve o post_parent delas: o original fica VAZIO e publicado. Foi exatamente
- * o que aconteceu com #773421 (OD-19722) -> #791839 (OD-20591), 12 variações.
- *
- * Duas âncoras estáveis, nesta ordem:
- *   1. o slug da origem (chave real do produto lá);
- *   2. o dono atual das variações do payload.
- *
- * Recusa (409) quando adotar seria destrutivo: variações espalhadas por mais de um
- * pai, ou sobreposição baixa demais com o pai candidato (aí o PILAR C apagaria
- * variações vivas que não são deste produto).
- *
- * @return int|WP_Error  id do produto a atualizar, 0 = criar normalmente
+ * O ojf_free_sku_global() apaga o produto detentor (`wp_delete_post(.., true)`),
+ * e isso leva os anexos e os objetos no R2 junto pelo hook delete_attachment.
+ * Na adoção o detentor é um produto VIVO com fotos — aqui só zeramos o `_sku`.
  */
-function ojf_adopt_existing_product($data, $is_variable) {
-    $codes = ojf_payload_variation_codes($data);
-    $via   = '';
+function ojf_release_sku_from_product($sku, $keep_id = 0) {
+    $sku = (string) $sku;
+    if ($sku === '') return;
+    global $wpdb;
+    $keep_id = (int) $keep_id;
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT p.ID, p.post_type FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_sku'
+         WHERE m.meta_value = %s AND p.ID <> %d", $sku, $keep_id
+    ));
+    foreach ((array) $rows as $r) {
+        $pid = (int) $r->ID;
+        if ($r->post_type === 'product_variation') {
+            $v = wc_get_product($pid);
+            if ($v) { $v->set_sku($sku . '-v' . $pid); $v->save(); }
+        } else {
+            update_post_meta($pid, '_sku', '');
+            update_post_meta($pid, '_ojf_sku_released', $sku);
+            if (function_exists('wc_delete_product_transients')) wc_delete_product_transients($pid);
+        }
+        clean_post_cache($pid);
+    }
+    if (class_exists('WC_Cache_Helper')) WC_Cache_Helper::invalidate_cache_group('products');
+}
 
-    $candidate = !empty($data['slug']) ? ojf_find_owned_product_by_slug((string) $data['slug']) : 0;
-    if ($candidate) $via = 'slug';
+/** Sobreposição mínima com as variações vivas do candidato. @return true|WP_Error */
+function ojf_check_adoption_overlap($candidate, $codes, $is_variable, $via) {
+    if (!$is_variable) return true;
+    $live  = ojf_parent_variation_codes($candidate);
+    $total = count($live);
+    if ($total === 0) return true;
+    $overlap = count(array_intersect(array_values($live), $codes));
+    if ($overlap >= (int) ceil($total / 2)) return true;
+    return new WP_Error('adoption_overlap_too_low', sprintf(
+        'Produto #%d casa por %s mas só %d das %d variações vivas dele estão no payload. Recusado: adotar aqui faria o PILAR C apagar as outras %d.',
+        $candidate, $via, $overlap, $total, $total - $overlap
+    ), ['status' => 409]);
+}
 
-    if (!$candidate && $is_variable && $codes) {
+/** O gêmeo pode ser absorvido? Tem de ser NOSSO e ficar vazio depois do sync. */
+function ojf_check_can_absorb_twin($twin_id, $codes) {
+    if (get_post_meta($twin_id, '_seller', true) !== 'odontojf') {
+        return new WP_Error('duplicate_products', sprintf(
+            'O slug e o SKU apontam para produtos diferentes e o #%d não é nosso (_seller != odontojf). Recusado: resolver isso à mão.',
+            $twin_id
+        ), ['status' => 409]);
+    }
+    $live   = ojf_parent_variation_codes($twin_id);
+    $orphan = array_diff(array_values($live), $codes);
+    if ($orphan) {
+        return new WP_Error('duplicate_products', sprintf(
+            'O slug e o SKU apontam para produtos diferentes, e o #%d tem %d variação(ões) que NÃO estão neste payload (%s). Recusado: elas ficariam órfãs num produto despublicado.',
+            $twin_id, count($orphan), implode(', ', array_slice($orphan, 0, 8))
+        ), ['status' => 409]);
+    }
+    return true;
+}
+
+/**
+ * Qual produto este payload JÁ É (>= 1.0.56). A identidade é o SLUG da origem.
+ *
+ * O `_sku` do pai variável é sintético — `OD-<código da 1ª variação>` — e a origem
+ * reordena/remove tamanhos, então esse código muda sozinho. Quando mudava, o create
+ * não achava o pai, o Woo criava um SEGUNDO produto e o save de cada variação
+ * reescrevia o post_parent dela: o original ficava publicado e VAZIO. Foi o que
+ * aconteceu com #773421 (OD-19722) -> #791839 (OD-20591), 12 variações.
+ *
+ * O slug é a chave estável (é a URL da origem e a URL que o cliente e o Google têm).
+ *
+ * @return array{id:int,via:string,twin:int}|WP_Error
+ *         id=0 → criar do zero. twin = duplicata a absorver depois do sync.
+ */
+function ojf_resolve_target_product($data, $is_variable, $by_sku) {
+    $codes   = ojf_payload_variation_codes($data);
+    $by_sku  = (int) $by_sku;
+    $by_slug = !empty($data['slug']) ? ojf_find_owned_product_by_slug((string) $data['slug']) : 0;
+
+    // 1. o SKU acha, e o slug concorda (ou nem existe): caminho de sempre.
+    if ($by_sku && (!$by_slug || $by_slug === $by_sku)) {
+        return ['id' => $by_sku, 'via' => 'sku', 'twin' => 0];
+    }
+
+    // 2. DUPLICAÇÃO VIVA: o slug é de um produto e o SKU é de outro. O slug manda —
+    //    é a URL com histórico. O outro vira gêmeo, absorvido depois do sync.
+    if ($by_slug && $by_sku) {
+        $can = ojf_check_can_absorb_twin($by_sku, $codes);
+        if (is_wp_error($can)) return $can;
+        $ok = ojf_check_adoption_overlap($by_slug, $codes, $is_variable, 'slug');
+        if (is_wp_error($ok)) return $ok;
+        return ['id' => $by_slug, 'via' => 'slug (duplicata #' . $by_sku . ' absorvida)', 'twin' => $by_sku];
+    }
+
+    // 3. só o slug acha: o pai foi re-chaveado na origem.
+    if ($by_slug) {
+        $ok = ojf_check_adoption_overlap($by_slug, $codes, $is_variable, 'slug');
+        if (is_wp_error($ok)) return $ok;
+        return ['id' => $by_slug, 'via' => 'slug', 'twin' => 0];
+    }
+
+    // 4. nem slug nem SKU: quem é o dono atual das variações do payload?
+    if ($is_variable && $codes) {
         $owners = [];
         foreach ($codes as $c) {
             $o = ojf_variation_owner_of_sku($c);
@@ -326,28 +407,43 @@ function ojf_adopt_existing_product($data, $is_variable) {
         }
         if ($owners) {
             reset($owners);
-            $candidate = (int) key($owners);
-            $via = 'variações';
+            $cand = (int) key($owners);
+            $ok = ojf_check_adoption_overlap($cand, $codes, $is_variable, 'variações');
+            if (is_wp_error($ok)) return $ok;
+            return ['id' => $cand, 'via' => 'variações', 'twin' => 0];
         }
     }
 
-    if (!$candidate) return 0;
+    return ['id' => 0, 'via' => '', 'twin' => 0];
+}
 
-    if ($is_variable) {
-        $existing = ojf_parent_variation_codes($candidate);
-        $total    = count($existing);
-        if ($total > 0) {
-            $overlap = count(array_intersect(array_values($existing), $codes));
-            if ($overlap < (int) ceil($total / 2)) {
-                return new WP_Error('adoption_overlap_too_low', sprintf(
-                    'Produto #%d casa por %s mas só %d das %d variações vivas dele estão no payload. Recusado: adotar aqui faria o PILAR C apagar as outras %d.',
-                    $candidate, $via, $overlap, $total, $total - $overlap
-                ), ['status' => 409]);
-            }
-        }
+/**
+ * Absorve a duplicata depois que o sync puxou as variações de volta pro canônico.
+ *
+ * NUNCA apaga: `wp_delete_post` levaria os anexos e os objetos no R2 junto. Só
+ * despublica e marca — reversível, e sobra rastro pra conferir.
+ *
+ * @return string  o que foi feito (entra na resposta e no log)
+ */
+function ojf_absorb_duplicate($twin_id, $canonical_id) {
+    $twin_id = (int) $twin_id;
+    if (!$twin_id || $twin_id === (int) $canonical_id) return '';
+    clean_post_cache($twin_id);
+    $left = ojf_parent_variation_codes($twin_id);
+    if ($left) {
+        $msg = sprintf('duplicata #%d MANTIDA publicada: ainda restaram %d variação(ões) nela', $twin_id, count($left));
+        error_log('[ojf] ' . $msg);
+        return $msg;
     }
-
-    return $candidate;
+    update_post_meta($twin_id, '_sku', '');
+    update_post_meta($twin_id, '_ojf_duplicate_of', (int) $canonical_id);
+    update_post_meta($twin_id, '_ojf_duplicate_at', current_time('mysql'));
+    wp_update_post(['ID' => $twin_id, 'post_status' => 'draft']);
+    clean_post_cache($twin_id);
+    if (function_exists('wc_delete_product_transients')) wc_delete_product_transients($twin_id);
+    $msg = sprintf('duplicata #%d despublicada (rascunho), variações devolvidas ao #%d', $twin_id, (int) $canonical_id);
+    error_log('[ojf] ' . $msg);
+    return $msg;
 }
 
 /** Compat com o interceptor da api-queue (update/delete): acha por _sku (ERP),
@@ -757,13 +853,13 @@ function ojf_create_product_handler($request) {
     // um produto novo, confere se ele já existe com OUTRO _sku (slug da origem /
     // dono das variações). Sem isso o create rouba as variações do original.
     $adopted_from = '';
-    if (!$existing) {
-        $adopt = ojf_adopt_existing_product($data, $is_variable);
-        if (is_wp_error($adopt)) return $adopt;
-        if ($adopt) {
-            $existing     = (int) $adopt;
-            $adopted_from = (string) get_post_meta($existing, '_sku', true);
-        }
+    $twin_id      = 0;
+    $resolved = ojf_resolve_target_product($data, $is_variable, $existing);
+    if (is_wp_error($resolved)) return $resolved;
+    $twin_id = (int) $resolved['twin'];
+    if ((int) $resolved['id'] && (int) $resolved['id'] !== (int) $existing) {
+        $existing     = (int) $resolved['id'];
+        $adopted_from = (string) get_post_meta($existing, '_sku', true);
     }
 
     try {
@@ -780,7 +876,7 @@ function ojf_create_product_handler($request) {
             // Adotado por slug/variações: re-chaveia o _sku no produto que já existe,
             // em vez de deixar um segundo produto nascer com o SKU novo.
             if ($adopted_from !== '' && $adopted_from !== $sku) {
-                ojf_free_sku_global($sku, $existing);
+                ojf_release_sku_from_product($sku, $existing);
                 $product->set_sku($sku);
                 $product->update_meta_data('_ojf_previous_sku', $adopted_from);
                 error_log(sprintf('[ojf] adoção: produto #%d re-chaveado %s -> %s', $existing, $adopted_from, $sku));
@@ -812,6 +908,10 @@ function ojf_create_product_handler($request) {
             // recompute price range / sync
             if (class_exists('WC_Product_Variable')) WC_Product_Variable::sync($product_id);
         }
+
+        // O sync já reparentou as variações do payload para o canônico (o Woo casa
+        // por SKU e reescreve o post_parent). Só agora o gêmeo pode sair do ar.
+        $twin_note = $twin_id ? ojf_absorb_duplicate($twin_id, (int) $product_id) : '';
         ojf_apply_images($product_id, $data);
 
         // IMAGENS DO CORPO (post_content) → R2 da loja. Precisa do product_id, então
@@ -849,6 +949,8 @@ function ojf_create_product_handler($request) {
             'sku'                => $sku,
             'created'            => !$existing,
             'adopted_from_sku'   => $adopted_from !== '' && $adopted_from !== $sku ? $adopted_from : null,
+            'matched_by'         => (string) $resolved['via'],
+            'duplicate_absorbed' => $twin_note !== '' ? $twin_note : null,
             'variations_created' => $vcount,
             'execution_time_ms'  => (int) round((microtime(true) - $t0) * 1000),
             'api_version'        => OJF_BRIDGE_VERSION,
