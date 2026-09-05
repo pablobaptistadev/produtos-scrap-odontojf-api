@@ -60,6 +60,33 @@ describe("buildPluginPayload — faithful variations", () => {
     expect(v).not.toHaveProperty("images");
   });
 
+  it("skipPricing leaves every price and stock key out", () => {
+    const body = buildPluginPayload(forceps as any, "3184", { skipPricing: true });
+    const v = body.variations[0];
+
+    // O plugin grava preço/estoque sob isset(): chave ausente = loja mantém o
+    // que já tem. É o que sustenta publicar conteúdo com o ERP fora do ar.
+    expect(v).not.toHaveProperty("regular_price");
+    expect(v).not.toHaveProperty("sale_price");
+    expect(v).not.toHaveProperty("stock_quantity");
+    expect(v).not.toHaveProperty("stock_status");
+    expect(body).not.toHaveProperty("regular_price");
+    expect(body).not.toHaveProperty("stock_quantity");
+
+    // e o conteúdo continua indo
+    expect(v.name).toBe("Fórceps Adulto N°150");
+    expect(v.images).toHaveLength(4);
+    expect(v.sku).toBe("411");
+  });
+
+  it("skipPricing on a simple product too", () => {
+    const simple = { type: "simple", name: "Y", regular_price: "10.00", stock_quantity: 5 };
+    const body = buildPluginPayload(simple as any, "230", { skipPricing: true });
+    expect(body).not.toHaveProperty("regular_price");
+    expect(body).not.toHaveProperty("stock_quantity");
+    expect(body.name).toBe("Y");
+  });
+
   it("does not prefix a parent SKU that is already prefixed", () => {
     expect(buildPluginPayload(forceps as any, "OD-3184").sku).toBe("OD-3184");
   });

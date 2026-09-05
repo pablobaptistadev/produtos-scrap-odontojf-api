@@ -49,6 +49,13 @@ export interface Env {
   /** By default a product whose ERP lookup failed is NOT pushed (price/stock
    *  would be wrong). Set to "1" to push anyway. */
   WOO_PUSH_INCLUDE_ERP_FAILED?: string;
+
+  /** Where price and stock come from on push.
+   *  "erp" (default) — the ERP is the source; a product without ERP data is skipped.
+   *  "store" — omit price and stock from the payload entirely, so WooCommerce
+   *  keeps whatever it already has. Lets content (title, description, gallery)
+   *  be published while the ERP is unreachable, without touching money. */
+  WOO_PUSH_PRICING?: string;
   /** How many times the push stage polls /queue-status before giving up and
    *  leaving the row as `processing`. 0 (default) = fire-and-forget. */
   WOO_PLUGIN_POLL_MAX?: string;

@@ -70,6 +70,11 @@
     // when absent is already "on".
     "AUTO_ENQUEUE_MEDIA": "1",
     "WOO_PUSH_ENABLED": "1",
+    // O ERP está fora do ar desde 04/09. "store" publica conteúdo (título,
+    // descrição, galeria) SEM enviar preço nem estoque: o payload não carrega
+    // essas chaves e o plugin só as grava sob isset(), então a loja mantém os
+    // próprios valores. Voltar para "erp" quando o ERP normalizar.
+    "WOO_PUSH_PRICING": "store",
     "ERP_FILIAL_CODIGO": "1"
   },
   "triggers": {

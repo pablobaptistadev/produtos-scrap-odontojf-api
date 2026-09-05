@@ -260,8 +260,12 @@ export async function runPushStage(env: Env, sku: string): Promise<void> {
     await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: reason });
     return;
   }
-  // Without ERP the price/stock would be wrong, so skip by default.
-  if (product.erp_status === "failed" && !isFlagOn(env.WOO_PUSH_INCLUDE_ERP_FAILED)) {
+  // Without ERP the price/stock would be wrong, so skip by default. The
+  // exception is WOO_PUSH_PRICING=store, where the payload carries no price at
+  // all and WooCommerce keeps its own — there is then nothing for missing ERP
+  // data to get wrong, and content can be published while the ERP is down.
+  const pricingFromStore = (env.WOO_PUSH_PRICING ?? "erp").toLowerCase() === "store";
+  if (product.erp_status === "failed" && !pricingFromStore && !isFlagOn(env.WOO_PUSH_INCLUDE_ERP_FAILED)) {
     const reason = "erp data missing — skipped (set WOO_PUSH_INCLUDE_ERP_FAILED=1 to push anyway)";
     await updateWooResult(env, sku, { status: "skipped", error: reason });
     await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: reason });

@@ -70,8 +70,15 @@ export async function computeIdemKey(sku: string, mergedUpdatedAt?: string | nul
 export function buildPluginPayload(
   merged: Record<string, any>,
   wooSku: string,
-  opts: { idemKey?: string; preferUpdate?: boolean } = {},
+  opts: { idemKey?: string; preferUpdate?: boolean; skipPricing?: boolean } = {},
 ): Record<string, any> {
+  // With skipPricing the price and stock keys are left OUT of the payload.
+  // Every set_regular_price/set_stock_quantity in the bridge is guarded by
+  // isset()/array_key_exists(), so an absent key means WooCommerce keeps what
+  // it already has — the store's own price. It is the safe way to publish
+  // content while the ERP is down: not "send the current price back", which
+  // would put 1.769 products through a needless read-and-rewrite of money.
+  const skipPricing = opts.skipPricing === true;
   const type = merged.type === "variable" ? "variable" : "simple";
   const isVariable = type === "variable";
   // Variable parents get `OD-` so they never collide with the variation that
@@ -89,14 +96,16 @@ export function buildPluginPayload(
   if (merged.short_description != null) body.short_description = merged.short_description;
 
   if (!isVariable) {
-    if (merged.regular_price != null) body.regular_price = String(merged.regular_price);
-    if (merged.sale_price != null) body.sale_price = String(merged.sale_price);
-    if (merged.stock_quantity != null) {
-      const q = Number(merged.stock_quantity) || 0;
-      body.stock_quantity = q <= 0 ? 1 : q;
-      body.stock_status = q <= 0 ? "instock" : merged.stock_status || "instock";
-    } else if (merged.stock_status) {
-      body.stock_status = merged.stock_status;
+    if (!skipPricing) {
+      if (merged.regular_price != null) body.regular_price = String(merged.regular_price);
+      if (merged.sale_price != null) body.sale_price = String(merged.sale_price);
+      if (merged.stock_quantity != null) {
+        const q = Number(merged.stock_quantity) || 0;
+        body.stock_quantity = q <= 0 ? 1 : q;
+        body.stock_status = q <= 0 ? "instock" : merged.stock_status || "instock";
+      } else if (merged.stock_status) {
+        body.stock_status = merged.stock_status;
+      }
     }
     if (merged.weight != null && merged.weight !== "") body.weight = String(merged.weight);
   }
@@ -111,14 +120,16 @@ export function buildPluginPayload(
     body.variations = merged.variations.map((v: Record<string, any>) => {
       const vb: Record<string, any> = {};
       if (v.sku != null && v.sku !== "") vb.sku = String(v.sku);
-      if (v.regular_price != null) vb.regular_price = String(v.regular_price);
-      if (v.sale_price != null) vb.sale_price = String(v.sale_price);
-      if (v.stock_quantity != null) {
-        const vq = Number(v.stock_quantity) || 0;
-        vb.stock_quantity = vq <= 0 ? 1 : vq;
-        vb.stock_status = vq <= 0 ? "instock" : v.stock_status || "instock";
-      } else if (v.stock_status) {
-        vb.stock_status = v.stock_status;
+      if (!skipPricing) {
+        if (v.regular_price != null) vb.regular_price = String(v.regular_price);
+        if (v.sale_price != null) vb.sale_price = String(v.sale_price);
+        if (v.stock_quantity != null) {
+          const vq = Number(v.stock_quantity) || 0;
+          vb.stock_quantity = vq <= 0 ? 1 : vq;
+          vb.stock_status = vq <= 0 ? "instock" : v.stock_status || "instock";
+        } else if (v.stock_status) {
+          vb.stock_status = v.stock_status;
+        }
       }
       if (v.weight != null && v.weight !== "") vb.weight = String(v.weight);
       if (v.dimensions && typeof v.dimensions === "object") vb.dimensions = v.dimensions;
@@ -153,6 +164,9 @@ export async function pushProductToPlugin(
   const payload = buildPluginPayload(args.merged as Record<string, any>, args.sku, {
     idemKey,
     preferUpdate: args.preferUpdate,
+    // WOO_PUSH_PRICING=store: publish content, leave price and stock as the
+    // store has them.
+    skipPricing: (env.WOO_PUSH_PRICING ?? "erp").toLowerCase() === "store",
   });
   const endpoint = args.preferUpdate ? "update-product" : "create-product";
   const url = `${pluginBase(env)}/${endpoint}`;
