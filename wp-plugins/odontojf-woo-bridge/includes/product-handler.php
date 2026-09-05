@@ -695,8 +695,81 @@ function ojf_apply_images($product_id, $data) {
     $product->save();
 }
 
+/** Quem segura este _sku hoje. @return array<int,object{ID,post_type,post_parent,parent_status}> */
+function ojf_sku_holders($sku) {
+    global $wpdb;
+    $sku = (string) $sku;
+    if ($sku === '') return [];
+    return (array) $wpdb->get_results($wpdb->prepare(
+        "SELECT p.ID, p.post_type, p.post_parent, p.post_status,
+                (SELECT pp.post_status FROM {$wpdb->posts} pp WHERE pp.ID = p.post_parent) AS parent_status
+         FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_sku'
+         WHERE m.meta_value = %s AND p.post_status != 'trash'", $sku
+    ));
+}
+
+/**
+ * O código já é de algo VIVO que não é uma variação deste pai? (>= 1.0.56)
+ *
+ * A origem reaproveita o mesmo código de item em kits e promoções — `resina-filtek-
+ * z350-xt` e `resina-filtek-z350-xt-4g-promo-sof-lex` dividem 10 códigos. O Woo exige
+ * `_sku` único, então quem empurrasse por último levava a variação do outro: os dois
+ * produtos se revezavam para sempre. Aqui isso vira sufixo, não roubo.
+ */
+function ojf_sku_taken_by_other($sku, $parent_id, $absorb_from = 0) {
+    foreach (ojf_sku_holders($sku) as $r) {
+        $pid = (int) $r->ID;
+        if ($r->post_type === 'product_variation') {
+            if ((int) $r->post_parent === (int) $parent_id) continue;      // é nossa
+            if ($absorb_from && (int) $r->post_parent === (int) $absorb_from) continue; // do gêmeo sendo absorvido
+            if ($r->parent_status === 'publish') return $pid;              // de outro pai vivo
+            continue;                                                       // órfã → liberável
+        }
+        if ($r->post_status === 'publish') return $pid;                     // produto vivo
+    }
+    return 0;
+}
+
+/** Variação DESTE pai que já carrega o código (por _ojf_erp_code ou _sku). */
+function ojf_find_own_variation($parent_id, $erp_code, $vsku) {
+    global $wpdb;
+    return (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT p.ID FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID
+         WHERE p.post_parent = %d AND p.post_type = 'product_variation'
+           AND p.post_status != 'trash'
+           AND ((m.meta_key = '_ojf_erp_code' AND m.meta_value = %s)
+             OR (m.meta_key = '_sku'          AND m.meta_value = %s))
+         ORDER BY p.ID ASC LIMIT 1", (int) $parent_id, (string) $erp_code, (string) $vsku
+    ));
+}
+
+/**
+ * Solta um _sku preso em ÓRFÃO (variação sem pai publicado, produto em rascunho).
+ * Ao contrário do ojf_free_sku_global(), nunca mexe em variação de pai publicado
+ * nem apaga produto publicado — esses casos já viraram sufixo antes de chegar aqui.
+ */
+function ojf_free_orphan_sku($sku, $keep_id = 0) {
+    $keep_id = (int) $keep_id;
+    foreach (ojf_sku_holders($sku) as $r) {
+        $pid = (int) $r->ID;
+        if ($pid === $keep_id) continue;
+        if ($r->post_type === 'product_variation') {
+            if ($r->parent_status === 'publish') continue;
+            $v = wc_get_product($pid);
+            if ($v) { $v->set_sku($sku . '-v' . $pid); $v->save(); }
+        } else {
+            if ($r->post_status === 'publish') continue;
+            wp_delete_post($pid, true); // rascunho/lixo de tentativa anterior
+        }
+        clean_post_cache($pid);
+    }
+    if (class_exists('WC_Cache_Helper')) WC_Cache_Helper::invalidate_cache_group('products');
+}
+
 /** Create/update variations by _sku for a variable parent. */
-function ojf_sync_variations($parent_id, $variations) {
+function ojf_sync_variations($parent_id, $variations, $absorb_from = 0) {
     if (!is_array($variations)) return 0;
     $parent = wc_get_product($parent_id);
     $parent_sku = $parent ? (string) $parent->get_sku() : '';
@@ -718,14 +791,28 @@ function ojf_sync_variations($parent_id, $variations) {
             $vsku = $erp_code . '-' . ($label !== '' ? $label : 'v');
         }
 
-        $existing_id = function_exists('wc_get_product_id_by_sku') ? (int) wc_get_product_id_by_sku($vsku) : 0;
-        // só reusa se for MESMO uma variação (evita pegar o pai/simples por engano)
-        if ($existing_id && get_post_type($existing_id) !== 'product_variation') $existing_id = 0;
+        // 1) já temos uma variação com esse código? (casa por _ojf_erp_code, então
+        //    sobrevive ao sufixo e não recria a variação a cada push)
+        $existing_id = ojf_find_own_variation($parent_id, $erp_code, $vsku);
+
+        // 2) o código está preso em algo vivo de outro produto → sufixa em vez de
+        //    roubar. O código real continua em _ojf_erp_code (é o que o carrinho usa).
+        if (!$existing_id && ojf_sku_taken_by_other($vsku, $parent_id, $absorb_from)) {
+            $vsku = $erp_code . '-p' . (int) $parent_id;
+            $existing_id = ojf_find_own_variation($parent_id, $erp_code, $vsku);
+        }
+
+        // 3) senão, reusa a variação solta que já carrega esse _sku.
+        if (!$existing_id) {
+            $found = function_exists('wc_get_product_id_by_sku') ? (int) wc_get_product_id_by_sku($vsku) : 0;
+            if ($found && get_post_type($found) === 'product_variation') $existing_id = $found;
+        }
+
         $variation = $existing_id ? new WC_Product_Variation($existing_id) : new WC_Product_Variation();
         $variation->set_parent_id($parent_id);
-        // Libera o SKU de qualquer órfão (draft/variação de tentativa anterior)
-        // antes de reivindicar → resolve "SKU inválido ou duplicado" no retry.
-        ojf_free_sku_global($vsku, $existing_id);
+        // Libera o SKU só de ÓRFÃOS antes de reivindicar → resolve "SKU inválido ou
+        // duplicado" no retry sem tirar a variação de um pai publicado.
+        ojf_free_orphan_sku($vsku, $existing_id);
         $variation->set_sku($vsku);
         $variation->update_meta_data('_ojf_erp_code', $erp_code); // código ERP p/ o carrinho
         $variation->set_status('publish');
@@ -904,7 +991,7 @@ function ojf_create_product_handler($request) {
 
         $vcount = 0;
         if ($is_variable) {
-            $vcount = ojf_sync_variations($product_id, $data['variations'] ?? []);
+            $vcount = ojf_sync_variations($product_id, $data['variations'] ?? [], $twin_id);
             // recompute price range / sync
             if (class_exists('WC_Product_Variable')) WC_Product_Variable::sync($product_id);
         }

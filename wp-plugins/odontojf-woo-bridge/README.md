@@ -186,6 +186,31 @@ cadastrado à mão nunca é adotado. Ao adotar, o `_sku` antigo fica em
 | `adoption_overlap_too_low` | menos de 50% das variações vivas do candidato estão no payload (o PILAR C apagaria o resto) |
 | `sku_belongs_to_variation` | (1.0.36) criar produto **simples** com SKU que já é de uma variação viva |
 
+### Código de variação compartilhado entre produtos diferentes
+
+Outro caminho de duplicação, e este o slug não resolve: a origem **reaproveita o mesmo
+código de item** em kits e promoções. Medido na loja — `resina-filtek-z350-xt` e
+`resina-filtek-z350-xt-4g-promo-sof-lex` dividem **10 códigos**;
+`dente-biotone-ipn-anterior-inferior` e `dente-biotone-anterior-inferior`, 4. Como o
+`_sku` é único no Woo, quem empurrasse por último **levava a variação do outro** — e os
+dois produtos se revezavam para sempre.
+
+`ojf_sync_variations()` agora resolve cada variação nesta ordem:
+
+1. variação **do próprio pai** com aquele código (`ojf_find_own_variation()`, casa por
+   `_ojf_erp_code` — sobrevive ao sufixo, então não recria a variação a cada push);
+2. código preso em algo **vivo de outro produto** (`ojf_sku_taken_by_other()`) → usa
+   `_sku` sufixado `<código>-p<pai>` em vez de tomar. O código real continua em
+   `_ojf_erp_code`, que é o que o carrinho e os shortcodes leem;
+3. senão, reusa a variação solta que já carrega aquele `_sku`.
+
+`ojf_free_orphan_sku()` substitui `ojf_free_sku_global()` nesse caminho: solta só órfão
+(variação sem pai publicado, produto em rascunho), nunca mexe em variação de pai
+publicado nem apaga produto publicado.
+
+Durante a absorção de uma duplicata o gêmeo é passado em `$absorb_from`, para que as
+variações dele sejam **puxadas de volta** em vez de sufixadas.
+
 ## Empacotamento
 
 ```bash

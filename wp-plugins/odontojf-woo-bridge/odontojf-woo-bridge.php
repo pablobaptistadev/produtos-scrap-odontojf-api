@@ -24,6 +24,16 @@
  *          objetos no R2 junto. Recusa com 409 quando absorver seria destrutivo:
  *          variacoes espalhadas por mais de um pai, gemeo que nao e nosso, gemeo
  *          com variacoes fora do payload, ou sobreposicao < 50% com o candidato.
+ *          E o codigo de variacao deixa de ser roubado entre produtos DIFERENTES:
+ *          a origem reaproveita o mesmo codigo em kits/promos (resina-filtek-z350-xt
+ *          e ...-4g-promo-sof-lex dividem 10), e como o Woo exige _sku unico os dois
+ *          se revezavam a cada push. Agora ojf_sync_variations() casa primeiro pela
+ *          variacao do PROPRIO pai (via _ojf_erp_code, sobrevive ao sufixo) e, se o
+ *          codigo estiver preso em algo vivo de outro produto, usa _sku sufixado
+ *          (<codigo>-p<pai>) em vez de tomar. O codigo real segue em _ojf_erp_code,
+ *          que e o que o carrinho e os shortcodes leem. ojf_free_orphan_sku()
+ *          substitui ojf_free_sku_global() nesse caminho: solta so orfao, nunca
+ *          mexe em variacao de pai publicado nem apaga produto publicado.
  *  1.0.55 - FIX: a pagina tem DUAS form.variations_form (a do tema e a do nosso
  *          widget) e o script prendia em .first(), a errada — por isso SKU,
  *          "Ler mais" e URL nao reagiam. Eventos agora sao delegados e valem
