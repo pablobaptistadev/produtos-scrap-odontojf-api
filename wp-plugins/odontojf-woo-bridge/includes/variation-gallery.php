@@ -46,6 +46,58 @@ function ojf_variation_gallery_image_ids($variation_id) {
     return array_values(array_unique(array_filter($ids)));
 }
 
+/* ── TÍTULO PRÓPRIO DA VARIAÇÃO ───────────────────────────────────────────── */
+
+/**
+ * Faz o título próprio do filho valer (>= 1.0.37).
+ *
+ * `set_name()` numa variação NÃO gruda: o data store do WooCommerce
+ * (WC_Product_Variation_Data_Store_CPT::update) regenera o post_title a cada
+ * save via generate_product_title(), que monta "Pai - Atributo". Medido na loja:
+ * depois do push a descrição entrou, mas o nome seguiu "Fórceps Adulto".
+ *
+ * A origem é o meta `_odontojf_variation_title`, gravado pelo worker junto das
+ * demais meta_data da variação. Dois filtros, porque são dois momentos:
+ *   • woocommerce_product_variation_title      → na geração, no save
+ *   • woocommerce_product_variation_get_name   → na leitura (carrinho, pedido,
+ *     Store API, admin) — cobre também as variações já salvas antes desta versão
+ */
+function ojf_variation_own_title($product) {
+    if (!$product instanceof WC_Product_Variation) return '';
+    $own = $product->get_meta('_odontojf_variation_title', true);
+    return is_string($own) ? trim($own) : '';
+}
+
+add_filter('woocommerce_product_variation_title', 'ojf_variation_title_on_generate', 10, 2);
+function ojf_variation_title_on_generate($title, $product) {
+    $own = ojf_variation_own_title($product);
+    return $own !== '' ? $own : $title;
+}
+
+add_filter('woocommerce_product_variation_get_name', 'ojf_variation_title_on_read', 10, 2);
+function ojf_variation_title_on_read($name, $product) {
+    $own = ojf_variation_own_title($product);
+    return $own !== '' ? $own : $name;
+}
+
+/**
+ * get_title() na variação NÃO passa por get_name(): WC_Product_Variation
+ * sobrescreve e devolve `parent_data['title']` direto —
+ *
+ *     public function get_title() {
+ *         return apply_filters( 'woocommerce_product_title', $this->parent_data['title'], $this );
+ *     }
+ *
+ * — que é por onde a Store API e os templates pegam o nome. Medido: com só os
+ * dois filtros acima, /wc/store/v1/products?sku=411 seguia devolvendo
+ * "Fórceps Adulto". Este é o hook que fecha o caso.
+ */
+add_filter('woocommerce_product_title', 'ojf_variation_title_on_get_title', 10, 2);
+function ojf_variation_title_on_get_title($title, $product) {
+    $own = ojf_variation_own_title($product);
+    return $own !== '' ? $own : $title;
+}
+
 /* ── COMMERCEKIT (renderização nativa) ────────────────────────────────────── */
 
 /**
