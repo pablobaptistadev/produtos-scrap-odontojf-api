@@ -13,6 +13,9 @@ function ojf_el_register_widgets($widgets_manager) {
     if (!function_exists('WC')) return;
     require_once OJF_BRIDGE_DIR . 'includes/elementor/class-ojf-add-to-cart-widget.php';
     $widgets_manager->register(new OJF_Add_To_Cart_Widget());
+
+    require_once OJF_BRIDGE_DIR . 'includes/elementor/class-ojf-field-widget.php';
+    $widgets_manager->register(new OJF_Field_Widget());
 }
 
 /**
