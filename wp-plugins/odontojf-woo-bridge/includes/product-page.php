@@ -244,14 +244,23 @@ function ojf_pp_assets() {
       .   'background:linear-gradient(to bottom,var(--ojf-fade-0,rgba(255,255,255,0)) 0%,'
       .   'var(--ojf-fade-1,rgba(255,255,255,.9)) 62%,var(--ojf-fade-2,#fff) 100%)}'
       . '.ojf-clamp.is-open::after{opacity:0}'
-      . '.ojf-more{order:4;display:flex;justify-content:center;margin:-6px 0 4px}'
-      . '.ojf-more button{appearance:none;background:transparent;border:0;cursor:pointer;padding:8px 14px;'
-      .   'font:inherit;font-weight:600;font-size:.92em;letter-spacing:.01em;color:currentColor;opacity:.85;'
-      .   'display:inline-flex;align-items:center;gap:7px;border-radius:999px;'
-      .   'transition:opacity .2s ease,background-color .2s ease}'
-      . '.ojf-more button:hover{opacity:1;background:rgba(0,0,0,.045)}'
-      . '.ojf-more button:focus-visible{outline:2px solid currentColor;outline-offset:2px}'
-      . '.ojf-more svg{width:14px;height:14px;transition:transform .35s cubic-bezier(.4,0,.2,1)}'
+      . '.ojf-more{order:4;display:flex;justify-content:center;margin:2px 0 10px}'
+        // O tema estiliza todo <button> como botão de compra (preenchido, largura
+        // total, caixa alta). Este é um controle de leitura, não uma ação de
+        // compra — não pode competir com "Adicionar ao carrinho". Daí a classe
+        // própria e os !important: é o estilo do tema que precisa ser vencido.
+      . '.ojf-more .ojf-more-btn{appearance:none!important;background:none!important;'
+      .   'background-color:transparent!important;background-image:none!important;border:0!important;'
+      .   'box-shadow:none!important;border-radius:0!important;width:auto!important;min-width:0!important;'
+      .   'height:auto!important;min-height:0!important;margin:0!important;padding:6px 4px!important;'
+      .   'font:inherit!important;font-size:.86em!important;font-weight:500!important;'
+      .   'letter-spacing:0!important;text-transform:none!important;line-height:1.2!important;'
+      .   'color:#6b7280!important;text-decoration:none!important;cursor:pointer;'
+      .   'display:inline-flex!important;align-items:center;justify-content:center;gap:6px;'
+      .   'transition:color .2s ease}'
+      . '.ojf-more .ojf-more-btn:hover{color:#111827!important;text-decoration:underline!important}'
+      . '.ojf-more .ojf-more-btn:focus-visible{outline:2px solid currentColor;outline-offset:3px}'
+      . '.ojf-more svg{width:13px;height:13px;opacity:.75;transition:transform .35s cubic-bezier(.4,0,.2,1)}'
       . '.ojf-more.is-open svg{transform:rotate(180deg)}'
       . '@media (prefers-reduced-motion:reduce){.ojf-pp-live,.ojf-clamp,.ojf-more svg{transition:none}'
       .   '.ojf-pp-out{opacity:1;transform:none}}';
@@ -398,7 +407,7 @@ function ojf_pp_assets() {
 
       var chev = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" '
                + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
-      var \$more = \$('<div class="ojf-more"><button type="button" aria-expanded="false">'
+      var \$more = \$('<div class="ojf-more"><button type="button" class="ojf-more-btn" aria-expanded="false">'
                     + '<span>Ler mais</span>' + chev + '</button></div>');
       \$(el).after(\$more);
 
