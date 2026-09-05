@@ -458,7 +458,59 @@ function ojf_pp_assets() {
       });
     });
 
-    \$form.on('reset_data.ojfPP', function () { animate(restore); });
+    /* ---- URL segue a seleção ---- */
+
+    // Sem isto a barra de endereço fica com a variação que veio no load (ou
+    // vazia) enquanto o cliente navega por outra — link copiado abre o item
+    // errado. replaceState não empilha histórico, então o botão Voltar continua
+    // saindo da página como o usuário espera.
+    var urlOriginal = window.location.href;
+
+    function syncUrl(variation) {
+      if (!window.history || !window.history.replaceState) return;
+      try {
+        var u = new URL(window.location.href);
+        Object.keys(variation.attributes || {}).forEach(function (k) {
+          var v = variation.attributes[k];
+          if (v === '' || v == null) u.searchParams.delete(k);
+          else u.searchParams.set(k, v);
+        });
+        window.history.replaceState(window.history.state, '', u.toString());
+      } catch (e) { /* URL não suportada: sem URL bonita, mas a página segue */ }
+    }
+
+    function clearUrl() {
+      if (!window.history || !window.history.replaceState) return;
+      try {
+        var u = new URL(window.location.href);
+        Array.prototype.slice.call(u.searchParams.keys())
+          .filter(function (k) { return k.indexOf('attribute_') === 0; })
+          .forEach(function (k) { u.searchParams.delete(k); });
+        window.history.replaceState(window.history.state, '', u.toString());
+      } catch (e) {}
+    }
+
+    // Título do documento acompanha, para a aba e o link compartilhado.
+    var docTitleOriginal = document.title;
+    function syncDocTitle(t) {
+      if (!t) return;
+      var tail = docTitleOriginal.indexOf(' – ') > -1
+        ? docTitleOriginal.slice(docTitleOriginal.indexOf(' – '))
+        : (docTitleOriginal.indexOf(' - ') > -1 ? docTitleOriginal.slice(docTitleOriginal.indexOf(' - ')) : '');
+      document.title = t + tail;
+    }
+
+    \$form.on('show_variation.ojfPPUrl', function (event, variation) {
+      if (!variation) return;
+      syncUrl(variation);
+      syncDocTitle(variation.ojf_variation_title);
+    });
+
+    \$form.on('reset_data.ojfPP', function () {
+      animate(restore);
+      clearUrl();
+      document.title = docTitleOriginal;
+    });
   });
 })(window.jQuery);
 JS;
