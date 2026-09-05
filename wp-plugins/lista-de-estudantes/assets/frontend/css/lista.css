@@ -1108,3 +1108,17 @@
             letter-spacing: 0.5px;
             margin-left: 8px;
         }
+
+/* Medidas e resumo da descrição do item (>= 2.1.0) */
+.listas-produto-medidas {
+    margin-top: 3px;
+    font-size: 12px;
+    color: #6b7280;
+}
+.listas-produto-descricao {
+    margin-top: 5px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: #4b5563;
+    max-width: 60ch;
+}

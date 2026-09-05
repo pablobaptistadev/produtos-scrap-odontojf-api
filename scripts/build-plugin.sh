@@ -26,10 +26,19 @@ else
 fi
 
 VERSION="$(sed -n 's/^ \* Version: *\([0-9.]*\).*/\1/p' "$SRC/$SLUG.php" | head -1)"
-CONST="$(sed -n "s/^define('OJF_BRIDGE_VERSION', *'\([0-9.]*\)').*/\1/p" "$SRC/$SLUG.php" | head -1)"
 [ -n "$VERSION" ] || { echo "erro: não achei 'Version:' no header" >&2; exit 1; }
-[ "$VERSION" = "$CONST" ] || {
-  echo "erro: header ($VERSION) e OJF_BRIDGE_VERSION ($CONST) divergem" >&2; exit 1; }
+
+# A constante de versão tem nome diferente em cada plugin (OJF_BRIDGE_VERSION,
+# LISTAS_ESTUDANTES_VERSION, ...): pega a primeira define('*_VERSION', 'x.y.z')
+# do arquivo principal e exige que bata com o header — versão divergente é a
+# forma mais fácil de subir um build achando que subiu outro.
+CONST_LINE="$(grep -m1 -E "^define\('[A-Z_]*VERSION', *'[0-9.]+'\)" "$SRC/$SLUG.php" || true)"
+if [ -n "$CONST_LINE" ]; then
+  CONST_NAME="$(printf '%s' "$CONST_LINE" | sed -E "s/^define\('([A-Z_]*VERSION)'.*/\1/")"
+  CONST="$(printf '%s' "$CONST_LINE" | sed -E "s/.*, *'([0-9.]+)'\).*/\1/")"
+  [ "$VERSION" = "$CONST" ] || {
+    echo "erro: header ($VERSION) e $CONST_NAME ($CONST) divergem" >&2; exit 1; }
+fi
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

@@ -9,7 +9,7 @@ if (!defined('ABSPATH')) exit;
  */
 final class Activation {
 
-    const DB_VERSION = '1.1';
+    const DB_VERSION = '1.2';
 
     public function register() {
         // O bootstrap do plugin já roda dentro de 'plugins_loaded', então
@@ -49,21 +49,66 @@ final class Activation {
         // Criar tabela para ordem dos produtos por categoria/lista
         $table_ordem = $wpdb->prefix . 'listas_produtos_ordem';
 
+        // variation_id (>= 1.2): a lista fixa a VARIAÇÃO escolhida pelo
+        // professor, não só o produto pai. 0 = produto simples ou "qualquer
+        // variação" (comportamento legado).
         $sql_ordem = "CREATE TABLE IF NOT EXISTS $table_ordem (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
             categoria_id BIGINT(20) UNSIGNED NOT NULL,
             product_id BIGINT(20) UNSIGNED NOT NULL,
+            variation_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
             position INT(11) DEFAULT 0,
             PRIMARY KEY (id),
-            UNIQUE KEY unique_produto_categoria (categoria_id, product_id),
+            UNIQUE KEY unique_produto_variacao (categoria_id, product_id, variation_id),
             KEY idx_categoria_id (categoria_id),
             KEY idx_position (categoria_id, position)
         ) $charset_collate;";
 
         dbDelta($sql_ordem);
 
+        self::upgradeOrdemIndex($table_ordem);
+
         // Atualizar versão para controle
         update_option('listas_similares_db_version', self::DB_VERSION);
+    }
+
+    /**
+     * Troca a UNIQUE KEY antiga (categoria_id, product_id) pela que inclui a
+     * variação. O dbDelta adiciona colunas com segurança, mas não é confiável
+     * para REDEFINIR um índice já existente — daí o ALTER explícito, feito só
+     * uma vez e nunca fatal: se falhar, a lista continua funcionando com uma
+     * variação por produto, que é exatamente o comportamento anterior.
+     */
+    private static function upgradeOrdemIndex($table_ordem) {
+        global $wpdb;
+
+        $has_column = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'variation_id'",
+            $table_ordem
+        ));
+        if (!$has_column) {
+            return; // dbDelta não conseguiu adicionar a coluna: não mexe no índice
+        }
+
+        $old_index = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM information_schema.STATISTICS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = 'unique_produto_categoria'",
+            $table_ordem
+        ));
+        if ($old_index) {
+            $wpdb->query("ALTER TABLE `{$table_ordem}` DROP INDEX `unique_produto_categoria`");
+        }
+
+        $new_index = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM information_schema.STATISTICS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = 'unique_produto_variacao'",
+            $table_ordem
+        ));
+        if (!$new_index) {
+            $wpdb->query("ALTER TABLE `{$table_ordem}`
+                          ADD UNIQUE KEY `unique_produto_variacao` (categoria_id, product_id, variation_id)");
+        }
     }
 
     public static function activate() {

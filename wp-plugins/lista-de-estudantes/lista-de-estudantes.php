@@ -2,13 +2,13 @@
 /**
  * Plugin Name: Listas de Estudantes
  * Description: Sistema de listas para estudantes com integração WooCommerce
- * Version: 2.0.2
+ * Version: 2.1.0
  * Author: Programador
  */
 
 if (!defined('ABSPATH')) exit;
 
-define('LISTAS_ESTUDANTES_VERSION', '2.0.2');
+define('LISTAS_ESTUDANTES_VERSION', '2.1.0');
 define('LISTAS_PARENT_CAT_ID', 91693);
 define('LISTAS_BRINDES_CAT_ID', 91694);
 define('LISTAS_BRINDES_VALOR_MINIMO', 1000);

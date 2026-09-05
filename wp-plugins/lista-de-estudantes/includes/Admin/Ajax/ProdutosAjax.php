@@ -5,6 +5,7 @@ use ListasEstudantes\Repository\OrdemRepository;
 use ListasEstudantes\Repository\SimilaresRepository;
 use ListasEstudantes\Domain\ProductSearchService;
 use ListasEstudantes\Domain\SkuResolver;
+use ListasEstudantes\Domain\VariationData;
 use ListasEstudantes\Domain\CategorySync;
 
 if (!defined('ABSPATH')) exit;
@@ -62,10 +63,16 @@ final class ProdutosAjax {
         // dela para saber o que está na lista).
         $produtos_ordem = array();
         $produtos_na_lista = array();
+        $variacao_por_produto = array(); // product_id => variation_id fixada
 
         if ($categoria_id) {
             $produtos_ordem = $this->ordem->getPositions($categoria_id);
             $produtos_na_lista = array_map('intval', array_keys($produtos_ordem));
+            foreach ($this->ordem->getOrderedRows($categoria_id) as $row) {
+                if ($row['variation_id'] > 0) {
+                    $variacao_por_produto[$row['product_id']] = $row['variation_id'];
+                }
+            }
         }
 
         // Resolver a lista de IDs a exibir
@@ -118,12 +125,25 @@ final class ProdutosAjax {
 
             $product_id = (int) $product_id;
 
+            // Quando a lista fixou uma variação, é ELA que o admin mostra —
+            // título, SKU, preço, peso e dimensões próprios. Sem isso o
+            // professor colava "411" e via "Fórceps Adulto" com a faixa de
+            // preço do pai, sem saber qual tinha entrado.
+            $pinned = isset($variacao_por_produto[$product_id]) ? $variacao_por_produto[$product_id] : 0;
+            $info = VariationData::get($product_id, $pinned);
+
             $produtos[] = array(
                 'id' => $product_id,
-                'name' => get_the_title($product_id),
-                'sku' => $product->get_sku() ?: '',
-                'price' => $product->get_price_html(),
-                'image' => wp_get_attachment_image_url($product->get_image_id(), 'medium') ?: wc_placeholder_img_src('medium'),
+                'variation_id' => $info ? (int) $info['variation_id'] : 0,
+                'name' => $info ? $info['title'] : get_the_title($product_id),
+                'sku' => $info ? $info['sku'] : ($product->get_sku() ?: ''),
+                'price' => $info ? $info['price_html'] : $product->get_price_html(),
+                'weight' => $info ? $info['weight_html'] : '',
+                'dimensions' => $info ? $info['dimensions_html'] : '',
+                'is_variable' => $product->is_type('variable'),
+                'image' => ($info && $info['variation_id'])
+                    ? $info['image']
+                    : (wp_get_attachment_image_url($product->get_image_id(), 'medium') ?: wc_placeholder_img_src('medium')),
                 'link' => get_permalink($product_id),
                 // "in_category" aqui significa "já está na lista" (tabela de ordem)
                 'in_category' => in_array($product_id, $produtos_na_lista),
@@ -272,12 +292,19 @@ final class ProdutosAjax {
             $sku = trim($sku);
             if (empty($sku)) continue;
 
-            $product_id = $this->skuResolver->resolveProductId($sku);
+            // resolve() (e não resolveProductId()) porque o código colado
+            // costuma ser o da VARIAÇÃO — o professor cola "411" querendo o
+            // Fórceps N°150, e guardar só o pai fazia a lista mostrar outro
+            // fórceps. Agora a variação vai junto e é ela que aparece.
+            $match = $this->skuResolver->resolve($sku);
 
-            if (!$product_id) {
+            if (!$match) {
                 $errors[] = "SKU '{$sku}' não encontrado";
                 continue;
             }
+
+            $product_id   = (int) $match['product_id'];
+            $variation_id = (int) $match['variation_id'];
 
             // Verificar se já está na categoria
             $current_cats = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'ids'));
@@ -289,13 +316,24 @@ final class ProdutosAjax {
                 wp_set_post_terms($product_id, $current_cats, 'product_cat');
             }
 
-            // Verificar se já existe na tabela de ordem
-            if (!$this->ordem->exists($categoria_id, $product_id)) {
-                $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id));
-                $added++;
-            } else {
+            // Já está como ITEM (produto + variação)? Duas variações do mesmo
+            // pai são dois itens legítimos da lista.
+            if ($this->ordem->exists($categoria_id, $product_id, $variation_id)) {
                 $already_in_list++;
+                continue;
             }
+
+            // Colou o código da variação e o pai já estava na lista "solto"
+            // (linha legada com variation_id = 0): promove aquela linha em vez
+            // de duplicar o produto na tela.
+            if ($variation_id > 0 && $this->ordem->exists($categoria_id, $product_id, 0)) {
+                $this->ordem->setVariation($categoria_id, $product_id, 0, $variation_id);
+                $added++;
+                continue;
+            }
+
+            $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id), $variation_id);
+            $added++;
         }
 
         wp_send_json_success(array(

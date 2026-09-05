@@ -90,7 +90,11 @@
                             
                             <div class="listas-produto-info-horizontal">
                                 <h4 class="listas-produto-title-horizontal">${produto.name}</h4>
-                                <div class="listas-produto-id">SKU: ${produto.sku || 'N/A'}</div>
+                                <div class="listas-produto-id">
+                                    SKU: ${produto.sku || 'N/A'}
+                                    ${produto.variation_id ? `<span class="listas-badge-variacao" title="Esta lista fixou uma variação específica">variação</span>` : ''}
+                                </div>
+                                ${(produto.weight || produto.dimensions) ? `<div class="listas-produto-medidas">${[produto.weight, produto.dimensions].filter(Boolean).join(' · ')}</div>` : ''}
                             </div>
                             
                             <div class="listas-produto-price-horizontal">${produto.price}</div>

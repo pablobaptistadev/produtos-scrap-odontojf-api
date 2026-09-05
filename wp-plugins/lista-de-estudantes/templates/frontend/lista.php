@@ -57,11 +57,11 @@ if (!defined('ABSPATH')) exit;
             </div>
         </div>
 
-        <?php if ($produtos_query->have_posts()): ?>
+        <?php if (!empty($itens)): ?>
             <div class="listas-produtos-lista">
-                <?php while ($produtos_query->have_posts()): $produtos_query->the_post(); ?>
+                <?php foreach ($itens as $item): ?>
                     <?php include LISTAS_ESTUDANTES_PATH . 'templates/frontend/parts/produto-card.php'; ?>
-                <?php endwhile; ?>
+                <?php endforeach; ?>
             </div>
         <?php else: ?>
             <p style="text-align: center; padding: 40px; color: #666;">Nenhum produto nesta lista ainda.</p>

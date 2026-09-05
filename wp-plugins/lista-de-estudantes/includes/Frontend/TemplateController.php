@@ -118,6 +118,30 @@ final class TemplateController {
         $similares_count_map = $this->similares->countForProducts($product_ids_for_similares);
         $produtos_query->rewind_posts();
 
+        // A partir da 2.1.0 a página é renderizada por ITEM da lista, não por
+        // produto: a tabela de ordem pode fixar uma variação, e duas variações
+        // do mesmo pai são dois itens legítimos (o kit pede o fórceps N°150 e
+        // o N°16). Um WP_Query devolveria o pai uma vez só.
+        $publicados = array();
+        foreach ($produtos_query->posts as $p) {
+            $publicados[(int) $p->ID] = true;
+        }
+
+        $itens = array();
+        if (!empty($ordered_ids)) {
+            foreach ($this->ordem->getOrderedRows($category->term_id) as $row) {
+                if (isset($publicados[$row['product_id']])) {
+                    $itens[] = $row;
+                }
+            }
+        }
+        if (empty($itens)) {
+            // Legado: lista sem ordem salva — um item por produto da categoria.
+            foreach ($produtos_query->posts as $p) {
+                $itens[] = array('product_id' => (int) $p->ID, 'variation_id' => 0, 'position' => 0);
+            }
+        }
+
         // Buscar produtos da categoria Brindes
         $brindes_query = new \WP_Query(array(
             'post_type' => 'product',
