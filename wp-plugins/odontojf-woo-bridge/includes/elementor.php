@@ -61,6 +61,11 @@ function ojf_atc_assets() {
       . '.ojf-atc .ojf-qty-btn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2;'
       .   'stroke-linecap:round;display:block}'
       . '.ojf-atc .ojf-qty label{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}'
+        // Estoque 1: o Woo já não deixa escolher quantidade, então o seletor sai
+        // da linha e o botão fica com 100% naturalmente.
+      . '.ojf-atc .ojf-qty--fixa{display:none!important}'
+        // O tema flutua o .quantity à esquerda; num container flex isso atrapalha.
+      . '.ojf-atc form.cart .quantity{float:none!important;margin:0!important}'
       . '.ojf-atc--sem-preco .woocommerce-variation-price{display:none!important}'
       . '.ojf-atc--sem-descricao .woocommerce-variation-description{display:none!important}'
         // Estado de carregando: o botão NÃO muda de cor nem de tamanho — só o
@@ -185,21 +190,39 @@ function ojf_atc_assets() {
     var qty = parseFloat(\$form.find('input.qty').val());
     if (!(qty > 0)) qty = 1;
 
-    \$.post(CFG.ajaxUrl, { product_id: productId, quantity: qty })
+    function restaura() {
+      \$btn.removeClass('ojf-atc-busy').removeAttr('aria-busy')
+          .css({ minWidth: '', minHeight: '' }).html(original);
+    }
+
+    // Rede de segurança: aconteça o que acontecer, o botão volta. Sem isto um
+    // erro de terceiro deixava o cliente olhando o spinner para sempre.
+    var watchdog = setTimeout(restaura, 15000);
+
+    \$.ajax({ url: CFG.ajaxUrl, type: 'POST', timeout: 20000,
+              data: { product_id: productId, quantity: qty } })
       .done(function (res) {
+        clearTimeout(watchdog);
+
         if (res && res.error && res.product_url) { window.location = res.product_url; return; }
 
-        \$(document.body).trigger('added_to_cart', [res && res.fragments, res && res.cart_hash, \$btn]);
+        // O estado de sucesso vem ANTES de disparar added_to_cart: esse evento
+        // é ouvido pelo tema e por outros plugins, e um deles estourando aqui
+        // abortava o resto deste callback — o botão ficava girando sem fim.
         state(\$btn, CHECK + '<span>' + (\$box.data('done') || 'Adicionado ao carrinho') + '</span>');
+        setTimeout(restaura, 2200);
 
-        setTimeout(function () {
-          \$btn.removeClass('ojf-atc-busy').removeAttr('aria-busy').css({ minWidth: '', minHeight: '' }).html(original);
-        }, 2200);
+        try {
+          \$(document.body).trigger('added_to_cart', [res && res.fragments, res && res.cart_hash, \$btn]);
+        } catch (err) {
+          if (window.console && console.warn) console.warn('[ojf] added_to_cart falhou num listener de terceiro', err);
+        }
       })
       .fail(function () {
-        // Nunca deixa o cliente preso num botão girando: devolve o botão e
-        // manda o formulário do jeito tradicional.
-        \$btn.removeClass('ojf-atc-busy').removeAttr('aria-busy').css({ minWidth: '', minHeight: '' }).html(original);
+        // Nunca deixa o cliente preso: devolve o botão e manda o formulário do
+        // jeito tradicional.
+        clearTimeout(watchdog);
+        restaura();
         \$form.off('submit').trigger('submit');
       });
   });

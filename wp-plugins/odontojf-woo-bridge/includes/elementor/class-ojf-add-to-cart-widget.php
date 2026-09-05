@@ -146,11 +146,34 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
         // valor sai com !important — sem isso o controle do Elementor não pega.
         $btn = '{{WRAPPER}} .ojf-atc form.cart .single_add_to_cart_button';
 
+        $this->add_control('layout_lado_a_lado', array(
+            'label' => esc_html__('Quantidade ao lado do botão', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SWITCHER,
+            'default' => 'yes',
+            'description' => esc_html__('O botão ocupa o resto da linha. Quando o produto só tem 1 em estoque o WooCommerce esconde a quantidade, e o botão fica sozinho com 100%.', 'odontojf'),
+        ));
+
+        $this->add_responsive_control('proporcao_qty', array(
+            'label' => esc_html__('Largura da quantidade (%)', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SLIDER,
+            'size_units' => array('%'),
+            'range' => array('%' => array('min' => 10, 'max' => 50)),
+            'default' => array('size' => 20, 'unit' => '%'),
+            'condition' => array('layout_lado_a_lado' => 'yes'),
+            'selectors' => array(
+                '{{WRAPPER}} .ojf-atc .ojf-qty' => 'flex: 0 0 {{SIZE}}% !important; max-width: {{SIZE}}% !important;',
+                // flex-basis 0 para a proporção valer de verdade: com basis
+                // auto o botão reservaria a largura do próprio texto antes.
+                $btn => 'flex: 1 1 0 !important; width: auto !important; min-width: 0 !important;',
+            ),
+        ));
+
         $this->add_responsive_control('largura_botao', array(
             'label' => esc_html__('Largura', 'odontojf'),
             'type' => \Elementor\Controls_Manager::SLIDER,
             'size_units' => array('%', 'px'),
             'range' => array('%' => array('min' => 10, 'max' => 100), 'px' => array('min' => 80, 'max' => 800)),
+            'condition' => array('layout_lado_a_lado!' => 'yes'),
             'selectors' => array($btn => 'width: {{SIZE}}{{UNIT}} !important; max-width: 100% !important;'),
         ));
 
@@ -566,13 +589,24 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
     private function decorateQuantity($html, $s) {
         if ($s['qty_custom'] !== 'yes') return $html;
 
+        // Estoque 1 (ou "vendido individualmente"): o WooCommerce renderiza o
+        // input como type="hidden" — não há quantidade a escolher. O container
+        // é marcado para sumir e o botão fica com a linha inteira sozinho, sem
+        // precisar de regra extra: é o único item flex que resta.
+        $fixa = (bool) preg_match('#<input[^>]*\bqty\b[^>]*\btype=."?hidden#i', $html)
+             || (bool) preg_match('#<input[^>]*\btype="hidden"[^>]*\bclass="[^"]*\bqty\b#i', $html);
+
+        $classe = $fixa ? 'ojf-qty ojf-qty--fixa ' : 'ojf-qty ';
+
         $html = preg_replace_callback(
             '#<div([^>]*\bclass="[^"]*\bquantity\b[^"]*"[^>]*)>#i',
-            function ($m) {
-                return '<div' . preg_replace('#class="#', 'class="ojf-qty ', $m[1], 1) . '>';
+            function ($m) use ($classe) {
+                return '<div' . preg_replace('#class="#', 'class="' . $classe, $m[1], 1) . '>';
             },
             $html, 1
         );
+
+        if ($fixa) return $html; // sem seletor visível, sem botões
 
         $menos = '<button type="button" class="ojf-qty-btn ojf-qty-minus" aria-label="' . esc_attr__('Diminuir', 'odontojf') . '">'
                . '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>';
