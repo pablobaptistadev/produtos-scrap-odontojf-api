@@ -127,6 +127,88 @@ function ojf_pp_product_info($atts) {
     return ob_get_clean();
 }
 
+/**
+ * [preco_info] — preço do produto, seguindo a variação escolhida.
+ *
+ * Simples  → preço do próprio produto.
+ * Variável → faixa do pai (ou o texto de `placeholder`) até o cliente escolher;
+ *            a partir daí o preço da variação, trocado pelo mesmo JS que cuida
+ *            de título/SKU/peso/dimensões — o data-ojf-field="price" basta.
+ *
+ * Atributos:
+ *   placeholder="Selecione uma opção"  texto enquanto nada está selecionado.
+ *                                      Útil quando alguma variação vem sem
+ *                                      preço e a faixa do pai começa em R$ 0,00.
+ *   classe="minha-classe"              classe extra no wrapper.
+ */
+add_shortcode('preco_info', 'ojf_pp_price_info');
+function ojf_pp_price_info($atts) {
+    $atts = shortcode_atts(['placeholder' => '', 'classe' => ''], $atts);
+
+    $product = $GLOBALS['product'] ?? null;
+    if (!$product instanceof WC_Product) {
+        $product = wc_get_product(get_the_ID());
+    }
+    if (!$product instanceof WC_Product) return '';
+
+    $is_variable = $product->is_type('variable');
+    $initial = ($is_variable && $atts['placeholder'] !== '')
+        ? '<span class="ojf-preco-placeholder">' . esc_html($atts['placeholder']) . '</span>'
+        : $product->get_price_html();
+
+    $classes = 'ojf-preco' . ($is_variable ? ' ojf-preco--variavel' : '') . ' ojf-pp-live';
+    if ($atts['classe'] !== '') $classes .= ' ' . sanitize_html_class($atts['classe']);
+
+    // O data-ojf-field só entra em variável: em produto simples não há o que
+    // trocar, e marcar à toa faria o JS tentar animar um elemento estático.
+    $field = $is_variable ? ' data-ojf-field="price"' : '';
+
+    return '<span class="' . esc_attr($classes) . '"' . $field . '>' . $initial . '</span>';
+}
+
+/**
+ * [titulo_info] — título do produto, seguindo a variação escolhida.
+ *
+ * Simples  → nome do produto.
+ * Variável → nome do pai (ou `placeholder`) até escolher; depois o título
+ *            próprio da variação, que o Bridge grava no meta
+ *            `_odontojf_variation_title` e injeta no JSON da página.
+ *
+ * Por que não dá para usar um campo dinâmico apontando para o meta: na PDP o
+ * objeto consultado é o produto PAI, então o campo leria o meta dele (vazio).
+ * O valor da variação só existe no cliente, depois da seleção.
+ *
+ * Atributos:
+ *   placeholder="Selecione uma opção"  texto enquanto nada está selecionado
+ *   tag="h2"                           elemento a renderizar (padrão: span)
+ *   classe="minha-classe"              classe extra
+ */
+add_shortcode('titulo_info', 'ojf_pp_title_info');
+function ojf_pp_title_info($atts) {
+    $atts = shortcode_atts(['placeholder' => '', 'tag' => 'span', 'classe' => ''], $atts);
+
+    $product = $GLOBALS['product'] ?? null;
+    if (!$product instanceof WC_Product) {
+        $product = wc_get_product(get_the_ID());
+    }
+    if (!$product instanceof WC_Product) return '';
+
+    $allowed = ['span', 'div', 'p', 'h1', 'h2', 'h3', 'h4', 'strong'];
+    $tag = in_array(strtolower($atts['tag']), $allowed, true) ? strtolower($atts['tag']) : 'span';
+
+    $is_variable = $product->is_type('variable');
+    $initial = ($is_variable && $atts['placeholder'] !== '')
+        ? '<span class="ojf-titulo-placeholder">' . esc_html($atts['placeholder']) . '</span>'
+        : esc_html($product->get_name());
+
+    $classes = 'ojf-titulo' . ($is_variable ? ' ojf-titulo--variavel' : '') . ' ojf-pp-live';
+    if ($atts['classe'] !== '') $classes .= ' ' . sanitize_html_class($atts['classe']);
+
+    $field = $is_variable ? ' data-ojf-field="title"' : '';
+
+    return '<' . $tag . ' class="' . esc_attr($classes) . '"' . $field . '>' . $initial . '</' . $tag . '>';
+}
+
 /* ── front: os campos seguem a variação ───────────────────────────────────── */
 
 add_action('wp_enqueue_scripts', 'ojf_pp_assets', 30);
@@ -150,6 +232,10 @@ function ojf_pp_assets() {
         // Transição dos campos que trocam.
       . '.ojf-pp-live{transition:opacity .2s cubic-bezier(.4,0,.2,1),transform .2s cubic-bezier(.4,0,.2,1);will-change:opacity,transform}'
       . '.ojf-pp-out{opacity:0;transform:translateY(-3px)}'
+      . '.ojf-preco{display:inline-block}'
+      . '.ojf-preco-placeholder{opacity:.6;font-weight:400}'
+      . '.ojf-titulo{display:inline-block}'
+      . '.ojf-titulo-placeholder{opacity:.6;font-weight:400}'
         // "Ler mais": a descrição da variação tem ~2.000 caracteres e empurrava
         // o botão de compra para fora da tela. Colapsa com degradê e expande.
       . '.ojf-clamp{position:relative;overflow:hidden;transition:max-height .45s cubic-bezier(.4,0,.2,1)}'
