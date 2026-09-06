@@ -113,8 +113,9 @@ final class OrdemRepository {
         return ($max_position !== null) ? $max_position + 1 : 0;
     }
 
+    /** @return bool false quando o banco recusou a linha (ex: coluna faltando). */
     public function insert($categoria_id, $product_id, $position, $variation_id = 0) {
-        $this->db->insert(
+        $ok = $this->db->insert(
             $this->table,
             array(
                 'categoria_id' => $categoria_id,
@@ -124,6 +125,8 @@ final class OrdemRepository {
             ),
             array('%d', '%d', '%d', '%d')
         );
+
+        return $ok !== false;
     }
 
     /**

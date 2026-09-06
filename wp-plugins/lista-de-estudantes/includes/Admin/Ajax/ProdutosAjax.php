@@ -237,7 +237,12 @@ final class ProdutosAjax {
         if ($variation_id > 0 && $this->ordem->exists($categoria_id, $product_id, 0)) {
             $this->ordem->setVariation($categoria_id, $product_id, 0, $variation_id);
         } else {
-            $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id), $variation_id);
+            // Erro do banco aqui é o que fazia o botão dizer "adicionado" e a
+            // lista continuar vazia. Agora ele aparece na tela.
+            $ok = $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id), $variation_id);
+            if (!$ok) {
+                wp_send_json_error('Não foi possível gravar o item na lista (erro no banco).');
+            }
         }
 
         wp_send_json_success(array(

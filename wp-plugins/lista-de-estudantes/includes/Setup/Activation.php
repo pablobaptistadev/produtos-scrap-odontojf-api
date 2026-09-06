@@ -9,7 +9,7 @@ if (!defined('ABSPATH')) exit;
  */
 final class Activation {
 
-    const DB_VERSION = '1.2';
+    const DB_VERSION = '1.3';
 
     public function register() {
         // O bootstrap do plugin já roda dentro de 'plugins_loaded', então
@@ -30,7 +30,7 @@ final class Activation {
         $table_name = $wpdb->prefix . 'listas_produtos_similares';
         $charset_collate = $wpdb->get_charset_collate();
 
-        $sql = "CREATE TABLE IF NOT EXISTS $table_name (
+        $sql = "CREATE TABLE $table_name (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
             product_id BIGINT(20) UNSIGNED NOT NULL,
             similar_product_id BIGINT(20) UNSIGNED NOT NULL,
@@ -52,7 +52,7 @@ final class Activation {
         // variation_id (>= 1.2): a lista fixa a VARIAÇÃO escolhida pelo
         // professor, não só o produto pai. 0 = produto simples ou "qualquer
         // variação" (comportamento legado).
-        $sql_ordem = "CREATE TABLE IF NOT EXISTS $table_ordem (
+        $sql_ordem = "CREATE TABLE $table_ordem (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
             categoria_id BIGINT(20) UNSIGNED NOT NULL,
             product_id BIGINT(20) UNSIGNED NOT NULL,
@@ -66,10 +66,18 @@ final class Activation {
 
         dbDelta($sql_ordem);
 
+        // Cinto e suspensório: o dbDelta é sensível a formatação e já falhou
+        // aqui uma vez (com "IF NOT EXISTS" ele lê o nome da tabela como "IF" e
+        // não altera nada). Sem a coluna, todo insert da lista falha calado.
+        self::ensureVariationColumn($table_ordem);
         self::upgradeOrdemIndex($table_ordem);
 
-        // Atualizar versão para controle
-        update_option('listas_similares_db_version', self::DB_VERSION);
+        // Só marca a migração como feita se a coluna EXISTE de verdade. Gravar a
+        // versão sem ela deixava o plugin achando que já migrou e nunca mais
+        // tentar — foi assim que a lista parou de salvar.
+        if (self::hasVariationColumn($table_ordem)) {
+            update_option('listas_similares_db_version', self::DB_VERSION);
+        }
     }
 
     /**
@@ -79,16 +87,29 @@ final class Activation {
      * uma vez e nunca fatal: se falhar, a lista continua funcionando com uma
      * variação por produto, que é exatamente o comportamento anterior.
      */
-    private static function upgradeOrdemIndex($table_ordem) {
+    /** A coluna variation_id já existe na tabela de ordem? */
+    private static function hasVariationColumn($table_ordem) {
         global $wpdb;
-
-        $has_column = $wpdb->get_var($wpdb->prepare(
+        return (bool) $wpdb->get_var($wpdb->prepare(
             "SELECT COUNT(*) FROM information_schema.COLUMNS
               WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'variation_id'",
             $table_ordem
         ));
-        if (!$has_column) {
-            return; // dbDelta não conseguiu adicionar a coluna: não mexe no índice
+    }
+
+    /** Adiciona variation_id se o dbDelta não tiver adicionado. Idempotente. */
+    private static function ensureVariationColumn($table_ordem) {
+        global $wpdb;
+        if (self::hasVariationColumn($table_ordem)) return;
+        $wpdb->query("ALTER TABLE `{$table_ordem}`
+                      ADD COLUMN `variation_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 0 AFTER `product_id`");
+    }
+
+    private static function upgradeOrdemIndex($table_ordem) {
+        global $wpdb;
+
+        if (!self::hasVariationColumn($table_ordem)) {
+            return; // sem a coluna não dá para mexer no índice
         }
 
         $old_index = $wpdb->get_var($wpdb->prepare(
