@@ -72,6 +72,14 @@ final class ProductSearchService {
             $match = $this->resolver->resolve($parte);
             if ($match) {
                 $push($match['product_id'], $match['variation_id']);
+                // Casou o PAI de um variável: lista também as variações dele, para
+                // dar para escolher sem precisar saber o código de cada uma. O pai
+                // continua na lista de resultados — dá para adicionar os dois.
+                if (!$match['variation_id'] && count($partes) === 1) {
+                    foreach ($this->variationIds($match['product_id']) as $vid) {
+                        $push($match['product_id'], $vid);
+                    }
+                }
                 continue;
             }
 
@@ -104,6 +112,20 @@ final class ProductSearchService {
         }
 
         return array_slice($itens, 0, $limit);
+    }
+
+    /** Variações publicadas de um pai variável, na ordem do menu. @return int[] */
+    private function variationIds($product_id, $limit = 30) {
+        $produto = wc_get_product($product_id);
+        if (!$produto || !$produto->is_type('variable')) return array();
+
+        $ids = array_map('intval', (array) $produto->get_children());
+        $vivas = array();
+        foreach ($ids as $id) {
+            if (get_post_status($id) === 'publish') $vivas[] = $id;
+            if (count($vivas) >= $limit) break;
+        }
+        return $vivas;
     }
 
     /** IDs de produto pai cujo título casa com o termo. @return int[] */

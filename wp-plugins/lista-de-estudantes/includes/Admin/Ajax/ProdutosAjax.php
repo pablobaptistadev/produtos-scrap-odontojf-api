@@ -129,10 +129,12 @@ final class ProdutosAjax {
             // título, SKU, preço, peso e dimensões próprios. Sem isso o
             // professor colava "411" e via "Fórceps Adulto" com a faixa de
             // preço do pai, sem saber qual tinha entrado.
-            // A variação vem do próprio resultado (busca por SKU de variação) ou,
-            // quando o item já está na lista, da linha salva.
+            // Na BUSCA o item é exatamente o que casou: buscar o SKU do pai mostra
+            // o PAI, mesmo que a lista já tenha uma variação dele fixada. Trocar
+            // pela variação fixada escondia o pai e impedia adicionar os dois.
+            // Fora da busca (listagem da própria lista) a linha salva é que manda.
             $pinned = (int) $item['variation_id'];
-            if (!$pinned && isset($variacao_por_produto[$product_id])) {
+            if (!$pinned && empty($search) && isset($variacao_por_produto[$product_id])) {
                 $pinned = (int) $variacao_por_produto[$product_id];
             }
             $info = VariationData::get($product_id, $pinned);
@@ -232,17 +234,14 @@ final class ProdutosAjax {
             ));
         }
 
-        // Já havia a linha do pai "solta" (legado) e agora veio a variação:
-        // promove aquela linha em vez de duplicar o produto na tela.
-        if ($variation_id > 0 && $this->ordem->exists($categoria_id, $product_id, 0)) {
-            $this->ordem->setVariation($categoria_id, $product_id, 0, $variation_id);
-        } else {
-            // Erro do banco aqui é o que fazia o botão dizer "adicionado" e a
-            // lista continuar vazia. Agora ele aparece na tela.
-            $ok = $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id), $variation_id);
-            if (!$ok) {
-                wp_send_json_error('Não foi possível gravar o item na lista (erro no banco).');
-            }
+        // O pai e cada variação são itens INDEPENDENTES da lista: dá para ter o
+        // "Fórceps Adulto" (aluno escolhe o tamanho) e a "N° 151" fixa lado a
+        // lado. Clicar em adicionar grava exatamente o que foi clicado.
+        // Erro do banco aqui é o que fazia o botão dizer "adicionado" e a lista
+        // continuar vazia. Agora ele aparece na tela.
+        $ok = $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id), $variation_id);
+        if (!$ok) {
+            wp_send_json_error('Não foi possível gravar o item na lista (erro no banco).');
         }
 
         wp_send_json_success(array(
@@ -257,19 +256,24 @@ final class ProdutosAjax {
 
         $post_id = absint($_POST['post_id']);
         $product_id = absint($_POST['product_id']);
+        $variation_id = isset($_POST['variation_id']) ? absint($_POST['variation_id']) : 0;
         $categoria_id = absint($_POST['categoria_id']);
 
         if (!$product_id || !$categoria_id) {
             wp_send_json_error('Dados inválidos');
         }
 
-        // Remover categoria do produto
-        $current_cats = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'ids'));
-        $new_cats = array_diff($current_cats, array($categoria_id));
-        wp_set_post_terms($product_id, $new_cats, 'product_cat');
+        // Remove SÓ este item. O pai e cada variação são linhas distintas: apagar
+        // "Fórceps Adulto - N° 151" não pode levar junto o "Fórceps Adulto".
+        $this->ordem->delete($categoria_id, $product_id, $variation_id);
 
-        // Remover da tabela de ordem
-        $this->ordem->delete($categoria_id, $product_id);
+        // A categoria só sai do produto quando não sobrou nenhuma linha dele
+        // nesta lista — senão as outras variações sumiriam do front.
+        if (!$this->ordem->existsAnyVariation($categoria_id, $product_id)) {
+            $current_cats = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'ids'));
+            $new_cats = array_diff($current_cats, array($categoria_id));
+            wp_set_post_terms($product_id, $new_cats, 'product_cat');
+        }
 
         wp_send_json_success(array(
             'message' => 'Produto removido da lista'
@@ -362,17 +366,14 @@ final class ProdutosAjax {
                 continue;
             }
 
-            // Colou o código da variação e o pai já estava na lista "solto"
-            // (linha legada com variation_id = 0): promove aquela linha em vez
-            // de duplicar o produto na tela.
-            if ($variation_id > 0 && $this->ordem->exists($categoria_id, $product_id, 0)) {
-                $this->ordem->setVariation($categoria_id, $product_id, 0, $variation_id);
+            // Colar "OD-8642, 3204" tem de dar DUAS linhas: o pai (aluno escolhe
+            // o tamanho) e a N° 151 fixa. Antes a segunda promovia a primeira e
+            // uma das duas sumia.
+            if ($this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id), $variation_id)) {
                 $added++;
-                continue;
+            } else {
+                $errors[] = "SKU '{$sku}' não pôde ser gravado na lista";
             }
-
-            $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id), $variation_id);
-            $added++;
         }
 
         wp_send_json_success(array(

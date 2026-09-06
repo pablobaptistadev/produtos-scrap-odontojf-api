@@ -137,6 +137,7 @@
                                 type="button" 
                                 class="listas-produto-remove-btn" 
                                 data-product-id="${produto.id}"
+                                data-variation-id="${produto.variation_id || 0}"
                                 title="Remover da lista"
                             >✕</button>
                             ` : ''}
@@ -187,6 +188,7 @@
                             nonce: self.nonce,
                             post_id: self.postId,
                             product_id: productId,
+                            variation_id: btn.data('variation-id') || 0,
                             categoria_id: self.categoriaId
                         },
                         success: (response) => {
