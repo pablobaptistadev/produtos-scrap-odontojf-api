@@ -289,6 +289,15 @@ function ojf_pp_assets() {
         'parentCodes' => $parent_codes,
         'dimUnit'    => get_option('woocommerce_dimension_unit'),
         'weightUnit' => get_option('woocommerce_weight_unit'),
+        // Formato de preço da loja, para montar o valor quando o Woo não manda
+        // price_html (ver ojf_pp_price_html no JS).
+        'price' => [
+            'sym'     => get_woocommerce_currency_symbol(),
+            'dec'     => wc_get_price_decimals(),
+            'decSep'  => wc_get_price_decimal_separator(),
+            'milSep'  => wc_get_price_thousand_separator(),
+            'format'  => get_woocommerce_price_format(),
+        ],
     ]);
 
     $js = <<<JS
@@ -457,6 +466,68 @@ function ojf_pp_assets() {
       });
     }
 
+    /* ---- preço ---- */
+
+    // O Woo só manda `price_html` por variação quando o menor e o maior preço do
+    // produto DIFEREM — e ele compara já arredondado pelas casas decimais da loja.
+    // Com a loja em 1 casa, 4,97 e 4,98 viram o mesmo número: o Woo conclui que o
+    // produto tem preço único, manda price_html vazio, e a linha de preço da
+    // variação fica em branco. Aqui montamos o valor a partir do display_price,
+    // que vem sempre.
+    function fmtPreco(v) {
+      var p = CFG.price || {};
+      var n = Number(v);
+      if (!isFinite(n)) return '';
+      var casas = (p.dec === 0 || p.dec) ? p.dec : 2;
+      var partes = n.toFixed(casas).split('.');
+      partes[0] = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, p.milSep || '');
+      var num = partes.join(p.decSep || ',');
+      var sym = '<span class="woocommerce-Price-currencySymbol">' + (p.sym || '') + '</span>';
+      var fmt = p.format || '%1\$s\u00a0%2\$s';
+      var txt = fmt.replace('%1\$s', sym).replace('%2\$s', num);
+      return '<span class="woocommerce-Price-amount amount"><bdi>' + txt + '</bdi></span>';
+    }
+
+    function precoDaVariacao(variation) {
+      if (variation.price_html) return variation.price_html;
+      if (variation.display_price === null || variation.display_price === undefined) return '';
+      var atual = fmtPreco(variation.display_price);
+      var reg   = variation.display_regular_price;
+      if (reg !== null && reg !== undefined && Number(reg) > Number(variation.display_price)) {
+        return '<del aria-hidden="true">' + fmtPreco(reg) + '</del> <ins>' + atual + '</ins>';
+      }
+      return atual;
+    }
+
+    // Quando o Woo manda price_html vazio E a página não mostra preço em nenhum
+    // outro lugar do produto, a linha de preço da variação fica em branco. Nesse
+    // caso — e só nesse — preenchemos o bloco nativo. Se já existe preço visível
+    // (widget de preço do tema, [preco_info]), não encostamos: preço duplicado é
+    // pior que preço no lugar de sempre.
+    // \$.trim saiu no jQuery 4; o WordPress ainda manda o 3, mas não custa.
+    function texto(\$el) { return String(\$el.text() || '').trim(); }
+
+    function precoVisivelNoProduto(\$form) {
+      if (pick('price').length) return true;
+      var \$escopo = \$form.closest('.product, .elementor-widget-wrap, body');
+      var achou = false;
+      \$escopo.find('p.price, span.price, .woocommerce-Price-amount').each(function () {
+        var \$e = \$(this);
+        if (\$e.closest('.elementor-menu-cart, .products, .elementor-loop-container, .woocommerce-variation-price, .related, .up-sells').length) return;
+        if (texto(\$e) !== '' && \$e.is(':visible')) { achou = true; return false; }
+      });
+      return achou;
+    }
+
+    function garantePreco(\$form, variation) {
+      var \$alvo = \$form.find('.woocommerce-variation-price').first();
+      if (!\$alvo.length) return;
+      if (texto(\$alvo) !== '') return;              // o Woo já preencheu
+      if (precoVisivelNoProduto(\$form)) return;      // já tem preço em outro lugar
+      var html = precoDaVariacao(variation);
+      if (html) \$alvo.html('<span class="price">' + html + '</span>');
+    }
+
     /* ---- eventos ---- */
 
     // show_variation dispara DEPOIS de o core reescrever o .single_variation,
@@ -474,7 +545,9 @@ function ojf_pp_assets() {
 
       animate(function () {
         if (variation.ojf_variation_title) setHtml('title', esc(variation.ojf_variation_title));
-        if (variation.price_html)          setHtml('price', variation.price_html);
+        var precoHtml = precoDaVariacao(variation);
+        if (precoHtml)                     setHtml('price', precoHtml);
+        garantePreco(\$form, variation);
         if (variation.weight_html)         setHtml('weight', variation.weight_html);
         if (variation.dimensions_html)     setHtml('dims', variation.dimensions_html);
 

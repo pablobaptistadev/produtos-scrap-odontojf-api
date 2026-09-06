@@ -2,13 +2,35 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.56
+ * Version: 1.0.59
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.59 - Troca \$.trim() por String().trim() no product-page: o jQuery 4 removeu
+ *          \$.trim, e uma excecao ali derrubava o handler inteiro do
+ *          show_variation (preco, SKU, "Ler mais" e URL de uma vez so). O
+ *          WordPress ainda manda o jQuery 3, entao e prevencao — mas foi
+ *          exatamente esse o modo de falha simulado no jsdom.
+ *  1.0.58 - Widget Carrinho OdontoJF ganha "Mostrar o preço". Produto SIMPLES nao
+ *          tem bloco de variacao, entao nao havia nada imprimindo preco na pagina
+ *          — o widget agora pode imprimir. Em variavel o elemento sai com
+ *          data-ojf-field="price" e o script da pagina troca o valor a cada
+ *          selecao. Secao de estilo propria (tipografia, cor, alinhamento,
+ *          espaco).
+ *  1.0.57 - FIX preco sumido na variacao: o Woo so manda price_html por variacao
+ *          quando o menor e o maior preco do produto DIFEREM, e compara ja
+ *          arredondado pelas casas decimais da loja. Com a loja em 1 casa, 4,97 e
+ *          4,98 viram o mesmo numero, o Woo conclui "preco unico" e manda
+ *          price_html vazio — a linha de preco ficava em branco (ABRIDOR DE BOCA
+ *          ABRITEC, #788865). O [preco_info] agora monta o valor a partir do
+ *          display_price, no formato da loja, quando o price_html vem vazio.
+ *          Botao adicionar ao carrinho: zera o margin-left que o tema aplicava
+ *          (.cart .single_add_to_cart_button). Ele so fazia sentido quando o campo
+ *          de quantidade era o do tema; com o nosso, o espacamento ja vem do gap
+ *          do flex. Nenhuma outra regra do botao mudou.
  *  1.0.56 - IDENTIDADE DO PRODUTO PASSA A SER O SLUG DA ORIGEM. O _sku do pai
  *          variavel e sintetico (OD-<codigo da 1a variacao>) e a origem reordena e
  *          remove tamanhos, entao esse codigo muda sozinho. Quando mudava, o create
@@ -218,7 +240,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.56');
+define('OJF_BRIDGE_VERSION', '1.0.59');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

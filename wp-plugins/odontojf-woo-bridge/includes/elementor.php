@@ -37,7 +37,12 @@ function ojf_atc_assets() {
         // conteúdo é centralizado por flex aqui. É a única regra de aparência
         // que entra sem o lojista pedir — o resto vem dos controles do widget.
         '.ojf-atc form.cart .single_add_to_cart_button{display:inline-flex!important;'
-      .   'align-items:center;justify-content:center;gap:10px;line-height:1.2;text-align:center}'
+      .   'align-items:center;justify-content:center;gap:10px;line-height:1.2;text-align:center;'
+        // O tema empurra o botão com um margin-left que só fazia sentido quando o
+        // campo de quantidade era o dele. O nosso já fica colado pelo gap do flex.
+      .   'margin-left:0!important}'
+      . '.ojf-atc .ojf-atc-preco{margin:0 0 10px;line-height:1.2}'
+      . '.ojf-atc .ojf-atc-preco del{opacity:.55;font-weight:400;margin-right:6px}'
       . '.ojf-atc .ojf-atc-ico{display:inline-flex;align-items:center;flex:0 0 auto}'
       . '.ojf-atc .ojf-atc-ico svg{width:18px;height:18px;display:block;fill:currentColor}'
       . '.ojf-atc .ojf-atc-ico i{line-height:1}'

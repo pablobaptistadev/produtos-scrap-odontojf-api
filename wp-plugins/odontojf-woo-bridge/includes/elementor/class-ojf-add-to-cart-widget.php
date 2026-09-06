@@ -55,6 +55,13 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
             'label' => esc_html__('Conteúdo', 'odontojf'),
         ));
 
+        $this->add_control('mostrar_preco', array(
+            'label' => esc_html__('Mostrar o preço', 'odontojf'),
+            'description' => esc_html__('Imprime o preço dentro do widget. Em produto simples é o preço dele; em variável começa na faixa do pai e passa a seguir a variação escolhida. Ligue quando a página não tiver outro elemento de preço.', 'odontojf'),
+            'type' => \Elementor\Controls_Manager::SWITCHER,
+            'default' => '',
+        ));
+
         $this->add_control('ocultar_preco_variacao', array(
             'label' => esc_html__('Ocultar o preço da variação', 'odontojf'),
             'description' => esc_html__('O bloco de variação do WooCommerce repete o preço. Deixe ligado se a página já mostra o preço em outro lugar.', 'odontojf'),
@@ -319,6 +326,44 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
         $this->end_controls_section();
 
         /* ── Quantidade ── */
+        /* ── Preço ── */
+        $this->start_controls_section('secao_estilo_preco', array(
+            'label' => esc_html__('Preço', 'odontojf'),
+            'tab'   => \Elementor\Controls_Manager::TAB_STYLE,
+            'condition' => array('mostrar_preco' => 'yes'),
+        ));
+
+        $this->add_group_control(\Elementor\Group_Control_Typography::get_type(), array(
+            'name'     => 'preco_tipografia',
+            'selector' => '{{WRAPPER}} .ojf-atc-preco',
+        ));
+
+        $this->add_control('preco_cor', array(
+            'label' => esc_html__('Cor', 'odontojf'),
+            'type'  => \Elementor\Controls_Manager::COLOR,
+            'selectors' => array('{{WRAPPER}} .ojf-atc-preco' => 'color:{{VALUE}}'),
+        ));
+
+        $this->add_responsive_control('preco_alinhamento', array(
+            'label' => esc_html__('Alinhamento', 'odontojf'),
+            'type'  => \Elementor\Controls_Manager::CHOOSE,
+            'options' => array(
+                'left'   => array('title' => esc_html__('Esquerda', 'odontojf'), 'icon' => 'eicon-text-align-left'),
+                'center' => array('title' => esc_html__('Centro', 'odontojf'),   'icon' => 'eicon-text-align-center'),
+                'right'  => array('title' => esc_html__('Direita', 'odontojf'),  'icon' => 'eicon-text-align-right'),
+            ),
+            'selectors' => array('{{WRAPPER}} .ojf-atc-preco' => 'text-align:{{VALUE}}'),
+        ));
+
+        $this->add_responsive_control('preco_espaco', array(
+            'label' => esc_html__('Espaço abaixo', 'odontojf'),
+            'type'  => \Elementor\Controls_Manager::SLIDER,
+            'range' => array('px' => array('min' => 0, 'max' => 60)),
+            'selectors' => array('{{WRAPPER}} .ojf-atc-preco' => 'margin-bottom:{{SIZE}}{{UNIT}}'),
+        ));
+
+        $this->end_controls_section();
+
         $this->start_controls_section('secao_estilo_qty', array(
             'label' => esc_html__('Quantidade', 'odontojf'),
             'tab' => \Elementor\Controls_Manager::TAB_STYLE,
@@ -562,6 +607,20 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
             esc_attr($settings['texto_sucesso']),
             $preselect !== '' ? ' data-preselect="' . esc_attr($preselect) . '"' : ''
         );
+
+        // Preço do widget. Em variável o data-ojf-field="price" faz o script da
+        // página trocar o valor a cada seleção (inclusive quando o Woo manda
+        // price_html vazio); em simples o HTML impresso aqui já é o final.
+        if ($settings['mostrar_preco'] === 'yes') {
+            $preco_html = $product->get_price_html();
+            if ($preco_html !== '') {
+                printf(
+                    '<div class="ojf-atc-preco"><span class="ojf-preco ojf-pp-live"%s>%s</span></div>',
+                    $product->is_type('variable') ? ' data-ojf-field="price"' : '',
+                    $preco_html
+                );
+            }
+        }
 
         // Captura a saída do template do Woo para poder mexer no botão. O
         // filtro woocommerce_product_single_add_to_cart_text não serve: o
