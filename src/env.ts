@@ -57,6 +57,8 @@ export interface Env {
   /** By default a product whose ERP lookup failed is NOT pushed (price/stock
    *  would be wrong). Set to "1" to push anyway. */
   WOO_PUSH_INCLUDE_ERP_FAILED?: string;
+  /** Com "1", empurra mesmo sem mudança desde o último push bem-sucedido. */
+  WOO_PUSH_FORCE?: string;
 
   /** Where price and stock come from on push.
    *  "erp" (default) — the ERP is the source; a product without ERP data is skipped.

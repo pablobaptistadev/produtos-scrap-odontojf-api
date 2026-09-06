@@ -334,6 +334,30 @@ export async function runPushStage(env: Env, sku: string): Promise<void> {
     return;
   }
 
+  // Nada mudou desde o último push bem-sucedido? Não empurra.
+  //
+  // O rebuild reprocessa o catálogo inteiro em ciclo, e sem esta guarda cada
+  // volta reenfileirava ~3.600 produtos no WordPress mesmo com o conteúdo
+  // idêntico. A fila de lá dá conta de ~2,5 jobs/min (produto variável com
+  // dezenas de variações e upload de imagem), então o backlog só crescia —
+  // 711 -> 1.461 numa tarde — e foi esse desequilíbrio que derrubou o banco
+  // da loja. WOO_PUSH_FORCE=1 ignora a guarda quando é preciso reempurrar tudo.
+  const jaPublicado = product.woo_status === "ok" && !!product.woo_pushed_at;
+  const mudouDesdePush =
+    !product.merged_updated_at ||
+    !product.woo_pushed_at ||
+    Date.parse(product.merged_updated_at) > Date.parse(product.woo_pushed_at);
+  if (jaPublicado && !mudouDesdePush && !isFlagOn(env.WOO_PUSH_FORCE)) {
+    await recordSyncEvent(env, {
+      sku,
+      stage: "push",
+      level: "info",
+      message: "sem mudança desde o último push — pulado",
+      context: { merged_updated_at: product.merged_updated_at, woo_pushed_at: product.woo_pushed_at },
+    });
+    return;
+  }
+
   const merged = safeJsonParse<Record<string, unknown>>(product.merged_json);
   if (!merged) throw new Error(`merged payload invalid JSON for sku=${sku}`);
   const wooSku = product.external_sku ?? sku;
