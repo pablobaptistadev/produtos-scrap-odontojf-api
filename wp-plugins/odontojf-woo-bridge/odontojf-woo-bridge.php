@@ -2,13 +2,20 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.63
+ * Version: 1.0.64
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.64 - FIX do 1.0.63: quem escolhe o CANONICO e o slug, nao o id de origem.
+ *          O _odontojf_scrape_id marca onde escrevemos por ultimo e, num par ja
+ *          duplicado, quem recebeu os pushes foi o GEMEO — usar o id para escolher
+ *          adotaria o gemeo e cimentaria a URL com -2 de vez. O id continua sendo
+ *          ancora, mas so quando o slug nao acha ninguem (origem renomeou, ou o
+ *          WordPress sufixou o nosso post_name). Tudo que sobra e gemeo a absorver;
+ *          mais de um gemeo distinto vira 409.
  *  1.0.63 - A identidade do produto passa a ser o ID IMUTAVEL da origem
  *          (`id: "KDznXluDKlRQwI2mdOvo"`), que o scrape ja gravava em
  *          `_odontojf_scrape_id` e ninguem usava. O slug era a melhor ancora que
@@ -263,7 +270,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.63');
+define('OJF_BRIDGE_VERSION', '1.0.64');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

@@ -320,11 +320,14 @@ function ojf_aq_intercept($result, $server, $request) {
             // quando a origem reordena os tamanhos. Recusar aqui bloqueava justamente
             // o re-chaveamento: o handler de update é um UPSERT e sabe achar o produto
             // pelo slug da origem. Tenta o slug antes de desistir.
-            if (function_exists('ojf_find_owned_product_by_origin_id')) {
-                $product_id = ojf_find_owned_product_by_origin_id(ojf_payload_origin_id($data));
-            }
-            if (!$product_id && !empty($data['slug']) && function_exists('ojf_find_owned_product_by_slug')) {
+            // Slug primeiro: é a URL canônica. O id de origem marca onde escrevemos
+            // por último e, num par duplicado, isso é o gêmeo — ele entra só quando
+            // o slug não acha ninguém.
+            if (!empty($data['slug']) && function_exists('ojf_find_owned_product_by_slug')) {
                 $product_id = ojf_find_owned_product_by_slug((string) $data['slug']);
+            }
+            if (!$product_id && function_exists('ojf_find_owned_product_by_origin_id')) {
+                $product_id = ojf_find_owned_product_by_origin_id(ojf_payload_origin_id($data));
             }
             if (!$product_id && (empty($data['name']) || empty($data['type']))) {
                 return ojf_aq_error('not_found', 'Product not found: ' . $data['sku'], 404);

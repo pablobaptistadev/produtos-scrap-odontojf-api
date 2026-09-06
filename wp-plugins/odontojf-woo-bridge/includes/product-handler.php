@@ -412,33 +412,53 @@ function ojf_resolve_target_product($data, $is_variable, $by_sku) {
     $codes   = ojf_payload_variation_codes($data);
     $by_sku  = (int) $by_sku;
 
-    // O id da origem é imutável; o slug não. Quando existe, ele manda — inclusive
-    // sobre o slug, que a origem pode reescrever e que o WordPress sufixa sozinho.
     $by_origin = ojf_find_owned_product_by_origin_id(ojf_payload_origin_id($data));
     $by_slug   = !empty($data['slug']) ? ojf_find_owned_product_by_slug((string) $data['slug']) : 0;
-    $canonico  = $by_origin ?: $by_slug;
-    $ancora    = $by_origin ? 'id de origem' : 'slug';
 
-    // 1. o SKU acha, e a âncora concorda (ou nem existe): caminho de sempre.
-    if ($by_sku && (!$canonico || $canonico === $by_sku)) {
+    // Quem é o CANÔNICO: o dono do slug da origem, sempre que existir. É a URL que
+    // o cliente e o Google têm. O `_odontojf_scrape_id` não serve para escolher —
+    // ele marca onde escrevemos por último, e num par duplicado isso é justamente o
+    // gêmeo. O id entra como âncora quando o slug não acha ninguém: origem renomeou
+    // o produto, ou o WordPress sufixou o nosso post_name com -2.
+    $canonico = $by_slug ?: $by_origin;
+    $ancora   = $by_slug ? 'slug' : 'id de origem';
+
+    // Todo o resto que aponta para outro produto é gêmeo a absorver.
+    $gemeos = [];
+    foreach ([$by_sku, $by_origin] as $cand) {
+        $cand = (int) $cand;
+        if ($cand && $cand !== $canonico && !in_array($cand, $gemeos, true)) $gemeos[] = $cand;
+    }
+
+    // 1. o SKU acha, e nada discorda: caminho de sempre.
+    if ($by_sku && $by_sku === $canonico) {
+        return ['id' => $by_sku, 'via' => 'sku', 'twin' => 0];
+    }
+    if ($by_sku && !$canonico) {
         return ['id' => $by_sku, 'via' => 'sku', 'twin' => 0];
     }
 
-    // 2. DUPLICAÇÃO VIVA: a âncora é de um produto e o SKU é de outro. A âncora
-    //    manda; o outro vira gêmeo, absorvido depois do sync.
-    if ($canonico && $by_sku) {
-        $can = ojf_check_can_absorb_twin($by_sku, $codes);
-        if (is_wp_error($can)) return $can;
-        $ok = ojf_check_adoption_overlap($canonico, $codes, $is_variable, $ancora);
-        if (is_wp_error($ok)) return $ok;
-        return ['id' => $canonico, 'via' => $ancora . ' (duplicata #' . $by_sku . ' absorvida)', 'twin' => $by_sku];
-    }
-
-    // 3. só a âncora acha: o pai foi re-chaveado na origem.
+    // 2. DUPLICAÇÃO VIVA: o canônico é um produto e o SKU (ou o id de origem) é de
+    //    outro. O canônico manda; o outro vira gêmeo, absorvido depois do sync.
     if ($canonico) {
+        if (count($gemeos) > 1) {
+            return new WP_Error('duplicate_products', sprintf(
+                'O produto #%d (por %s) concorre com mais de uma duplicata (%s). Recusado: resolver isso à mão.',
+                $canonico, $ancora, '#' . implode(', #', $gemeos)
+            ), ['status' => 409]);
+        }
+        $twin = $gemeos ? (int) $gemeos[0] : 0;
+        if ($twin) {
+            $can = ojf_check_can_absorb_twin($twin, $codes);
+            if (is_wp_error($can)) return $can;
+        }
         $ok = ojf_check_adoption_overlap($canonico, $codes, $is_variable, $ancora);
         if (is_wp_error($ok)) return $ok;
-        return ['id' => $canonico, 'via' => $ancora, 'twin' => 0];
+        return [
+            'id'   => $canonico,
+            'via'  => $ancora . ($twin ? ' (duplicata #' . $twin . ' absorvida)' : ''),
+            'twin' => $twin,
+        ];
     }
 
     // 4. nem slug nem SKU: quem é o dono atual das variações do payload?
