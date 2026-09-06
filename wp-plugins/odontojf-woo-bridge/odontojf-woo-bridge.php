@@ -2,13 +2,20 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.62
+ * Version: 1.0.63
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.63 - A identidade do produto passa a ser o ID IMUTAVEL da origem
+ *          (`id: "KDznXluDKlRQwI2mdOvo"`), que o scrape ja gravava em
+ *          `_odontojf_scrape_id` e ninguem usava. O slug era a melhor ancora que
+ *          tinhamos, mas a origem pode reescreve-lo e o WordPress sufixa com -2
+ *          quando o post_name esta ocupado — nos dois casos o produto viraria
+ *          duplicata. O id nao muda. Ordem agora: id de origem -> slug -> dono das
+ *          variacoes -> criar. Vale tambem no interceptor do /update-product.
  *  1.0.62 - O interceptor do /update-product recusava com 404 quando nenhum produto
  *          tinha aquele _sku — e era exatamente o caso do re-chaveamento, porque o
  *          codigo sintetico do pai muda quando a origem reordena. O handler de
@@ -256,7 +263,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.62');
+define('OJF_BRIDGE_VERSION', '1.0.63');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

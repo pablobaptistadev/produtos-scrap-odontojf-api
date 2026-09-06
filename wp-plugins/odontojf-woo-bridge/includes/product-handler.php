@@ -249,6 +249,37 @@ function ojf_find_owned_product_by_slug($slug) {
     ));
 }
 
+/**
+ * Produto NOSSO com este id de origem (>= 1.0.63).
+ *
+ * A origem dá a cada produto um id imutável (`id: "KDznXluDKlRQwI2mdOvo"`), que o
+ * scrape já grava em `_odontojf_scrape_id`. Ao contrário do slug — que a origem pode
+ * reescrever, e que o WordPress sufixa com `-2` quando o post_name está ocupado — esse
+ * id não muda. É a única âncora que não depende de nada mudar de ideia.
+ */
+function ojf_find_owned_product_by_origin_id($origin_id) {
+    $origin_id = trim((string) $origin_id);
+    if ($origin_id === '') return 0;
+    global $wpdb;
+    return (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT p.ID FROM {$wpdb->posts} p
+         INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_odontojf_scrape_id'
+         WHERE m.meta_value = %s AND p.post_type = 'product' AND p.post_status != 'trash'
+         ORDER BY p.ID ASC LIMIT 1", $origin_id
+    ));
+}
+
+/** O id de origem que veio no payload (meta_data[] do pai). */
+function ojf_payload_origin_id($data) {
+    if (empty($data['meta_data']) || !is_array($data['meta_data'])) return '';
+    foreach ($data['meta_data'] as $m) {
+        if (isset($m['key']) && $m['key'] === '_odontojf_scrape_id') {
+            return trim((string) ($m['value'] ?? ''));
+        }
+    }
+    return '';
+}
+
 /** Códigos ERP das variações que vêm no payload. @return string[] */
 function ojf_payload_variation_codes($data) {
     $out = [];
@@ -380,28 +411,34 @@ function ojf_check_can_absorb_twin($twin_id, $codes) {
 function ojf_resolve_target_product($data, $is_variable, $by_sku) {
     $codes   = ojf_payload_variation_codes($data);
     $by_sku  = (int) $by_sku;
-    $by_slug = !empty($data['slug']) ? ojf_find_owned_product_by_slug((string) $data['slug']) : 0;
 
-    // 1. o SKU acha, e o slug concorda (ou nem existe): caminho de sempre.
-    if ($by_sku && (!$by_slug || $by_slug === $by_sku)) {
+    // O id da origem é imutável; o slug não. Quando existe, ele manda — inclusive
+    // sobre o slug, que a origem pode reescrever e que o WordPress sufixa sozinho.
+    $by_origin = ojf_find_owned_product_by_origin_id(ojf_payload_origin_id($data));
+    $by_slug   = !empty($data['slug']) ? ojf_find_owned_product_by_slug((string) $data['slug']) : 0;
+    $canonico  = $by_origin ?: $by_slug;
+    $ancora    = $by_origin ? 'id de origem' : 'slug';
+
+    // 1. o SKU acha, e a âncora concorda (ou nem existe): caminho de sempre.
+    if ($by_sku && (!$canonico || $canonico === $by_sku)) {
         return ['id' => $by_sku, 'via' => 'sku', 'twin' => 0];
     }
 
-    // 2. DUPLICAÇÃO VIVA: o slug é de um produto e o SKU é de outro. O slug manda —
-    //    é a URL com histórico. O outro vira gêmeo, absorvido depois do sync.
-    if ($by_slug && $by_sku) {
+    // 2. DUPLICAÇÃO VIVA: a âncora é de um produto e o SKU é de outro. A âncora
+    //    manda; o outro vira gêmeo, absorvido depois do sync.
+    if ($canonico && $by_sku) {
         $can = ojf_check_can_absorb_twin($by_sku, $codes);
         if (is_wp_error($can)) return $can;
-        $ok = ojf_check_adoption_overlap($by_slug, $codes, $is_variable, 'slug');
+        $ok = ojf_check_adoption_overlap($canonico, $codes, $is_variable, $ancora);
         if (is_wp_error($ok)) return $ok;
-        return ['id' => $by_slug, 'via' => 'slug (duplicata #' . $by_sku . ' absorvida)', 'twin' => $by_sku];
+        return ['id' => $canonico, 'via' => $ancora . ' (duplicata #' . $by_sku . ' absorvida)', 'twin' => $by_sku];
     }
 
-    // 3. só o slug acha: o pai foi re-chaveado na origem.
-    if ($by_slug) {
-        $ok = ojf_check_adoption_overlap($by_slug, $codes, $is_variable, 'slug');
+    // 3. só a âncora acha: o pai foi re-chaveado na origem.
+    if ($canonico) {
+        $ok = ojf_check_adoption_overlap($canonico, $codes, $is_variable, $ancora);
         if (is_wp_error($ok)) return $ok;
-        return ['id' => $by_slug, 'via' => 'slug', 'twin' => 0];
+        return ['id' => $canonico, 'via' => $ancora, 'twin' => 0];
     }
 
     // 4. nem slug nem SKU: quem é o dono atual das variações do payload?

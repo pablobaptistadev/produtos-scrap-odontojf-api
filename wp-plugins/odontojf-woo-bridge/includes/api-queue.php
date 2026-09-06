@@ -320,7 +320,10 @@ function ojf_aq_intercept($result, $server, $request) {
             // quando a origem reordena os tamanhos. Recusar aqui bloqueava justamente
             // o re-chaveamento: o handler de update é um UPSERT e sabe achar o produto
             // pelo slug da origem. Tenta o slug antes de desistir.
-            if (!empty($data['slug']) && function_exists('ojf_find_owned_product_by_slug')) {
+            if (function_exists('ojf_find_owned_product_by_origin_id')) {
+                $product_id = ojf_find_owned_product_by_origin_id(ojf_payload_origin_id($data));
+            }
+            if (!$product_id && !empty($data['slug']) && function_exists('ojf_find_owned_product_by_slug')) {
                 $product_id = ojf_find_owned_product_by_slug((string) $data['slug']);
             }
             if (!$product_id && (empty($data['name']) || empty($data['type']))) {
