@@ -20,6 +20,7 @@
             },
             
             loadProdutos(search = '') {
+                this.lastSearch = String(search || '').trim();
                 const grid = $('#listas-produtos-grid');
                 grid.html('<div class="listas-loading">Buscando produtos...</div>');
                 
@@ -53,23 +54,51 @@
                     return;
                 }
                 
-                produtos.sort((a, b) => {
-                    // Primeiro: produtos adicionados vêm antes
-                    if (a.in_category && !b.in_category) return -1;
-                    if (!a.in_category && b.in_category) return 1;
-                    // Segundo: ordenar por menu_order para produtos adicionados
-                    if (a.in_category && b.in_category) {
-                        return (a.menu_order || 9999) - (b.menu_order || 9999);
-                    }
-                    return 0;
+                // Agrupar por produto: o PAI encabeça e as variações dele vêm logo
+                // abaixo, recuadas. Sem isso a busca devolvia uma lista plana de
+                // "Fórceps Adulto - N° 16, N° 18L, N° 23..." e o pai se perdia no
+                // meio (ou ficava lá em cima, no bloco dos já adicionados).
+                const grupos = new Map();
+                produtos.forEach(p => {
+                    if (!grupos.has(p.id)) grupos.set(p.id, []);
+                    grupos.get(p.id).push(p);
                 });
-                
+
+                const ordenados = [];
+                Array.from(grupos.values())
+                    .map(itens => {
+                        itens.sort((a, b) => {
+                            // o pai (sem variação) encabeça o grupo
+                            const va = a.variation_id ? 1 : 0;
+                            const vb = b.variation_id ? 1 : 0;
+                            if (va !== vb) return va - vb;
+                            return (a.menu_order || 9999) - (b.menu_order || 9999)
+                                || String(a.name).localeCompare(String(b.name), 'pt-BR', { numeric: true });
+                        });
+                        return itens;
+                    })
+                    .sort((ga, gb) => {
+                        const addA = ga.some(i => i.in_category) ? 0 : 1;
+                        const addB = gb.some(i => i.in_category) ? 0 : 1;
+                        if (addA !== addB) return addA - addB;
+                        const posA = Math.min(...ga.map(i => i.menu_order || 9999));
+                        const posB = Math.min(...gb.map(i => i.menu_order || 9999));
+                        return posA - posB;
+                    })
+                    .forEach(itens => itens.forEach(i => ordenados.push(i)));
+
+                produtos = ordenados;
+
+                // O divisor só faz sentido na listagem da lista. Numa busca ele
+                // partia o grupo no meio, separando o pai das variações dele.
+                const emBusca = !!(this.lastSearch && this.lastSearch.length);
                 const hasAdded = produtos.some(p => p.in_category);
-                let dividerInserted = false;
+                let dividerInserted = emBusca;
 
                 let html = '';
                 produtos.forEach(produto => {
                     const isAdded = produto.in_category;
+                    const isVariacao = !!produto.variation_id;
 
                     // Divisor "Produtos sugeridos" entre os itens da lista e as sugestões
                     if (!isAdded && hasAdded && !dividerInserted) {
@@ -77,7 +106,8 @@
                         dividerInserted = true;
                     }
 
-                    const itemClass = isAdded ? 'listas-produto-item added-item' : 'listas-produto-item';
+                    const itemClass = (isAdded ? 'listas-produto-item added-item' : 'listas-produto-item')
+                        + (isVariacao ? ' listas-produto-item--variacao' : '');
                     const similaresCount = produto.similares_count || 0;
 
                     html += `

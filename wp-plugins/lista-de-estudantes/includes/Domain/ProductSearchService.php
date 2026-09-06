@@ -71,6 +71,10 @@ final class ProductSearchService {
             // 1) SKU exato (regra OD- + variação). A variação vem como ela mesma.
             $match = $this->resolver->resolve($parte);
             if ($match) {
+                // O PAI vem sempre primeiro, mesmo quando o código digitado é o
+                // de uma variação: a tela mostra a hierarquia (pai e, abaixo, as
+                // variações dele) em vez de uma linha solta sem contexto.
+                $push($match['product_id'], 0);
                 $push($match['product_id'], $match['variation_id']);
                 // Casou o PAI de um variável: lista também as variações dele, para
                 // dar para escolher sem precisar saber o código de cada uma. O pai
