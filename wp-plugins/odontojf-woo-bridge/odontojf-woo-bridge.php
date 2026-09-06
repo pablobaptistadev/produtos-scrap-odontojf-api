@@ -2,13 +2,20 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.64
+ * Version: 1.0.65
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.65 - A adocao ainda morria em "SKU invalido ou duplicado". O 1.0.61 solta o
+ *          codigo procurando o dono pelo postmeta _sku — so que a PRIMEIRA
+ *          tentativa (1.0.60) ja tinha zerado esse postmeta sem conseguir mexer no
+ *          lookup. Resultado: #791839 e #770435 com postmeta vazio e
+ *          wc_product_meta_lookup ainda ocupado, e o Woo recusando o canonico por
+ *          um dono que nao existe mais. ojf_release_sku_from_lookup() agora limpa
+ *          o lookup por ele mesmo, sem depender do postmeta.
  *  1.0.64 - FIX do 1.0.63: quem escolhe o CANONICO e o slug, nao o id de origem.
  *          O _odontojf_scrape_id marca onde escrevemos por ultimo e, num par ja
  *          duplicado, quem recebeu os pushes foi o GEMEO — usar o id para escolher
@@ -270,7 +277,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.64');
+define('OJF_BRIDGE_VERSION', '1.0.65');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

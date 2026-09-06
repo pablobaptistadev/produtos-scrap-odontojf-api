@@ -318,6 +318,39 @@ function ojf_parent_variation_codes($parent_id) {
  * e isso leva os anexos e os objetos no R2 junto pelo hook delete_attachment.
  * Na adoção o detentor é um produto VIVO com fotos — aqui só zeramos o `_sku`.
  */
+/**
+ * Solta o SKU de quem o segura SÓ na wc_product_meta_lookup (>= 1.0.65).
+ *
+ * O ojf_release_sku_from_product() procura o detentor pelo postmeta `_sku`. Mas
+ * quando uma tentativa anterior já zerou o postmeta e não conseguiu atualizar o
+ * lookup, ninguém mais acha esse detentor — e o lookup continua respondendo que
+ * o código está em uso. Era o estado exato de #791839 (OD-20591) e #770435
+ * (OD-17134): postmeta vazio, lookup ocupado, e todo save do canônico recusado
+ * com "SKU inválido ou duplicado" por causa de um dono que já não existia.
+ */
+function ojf_release_sku_from_lookup($sku, $keep_id = 0) {
+    global $wpdb;
+    $sku = (string) $sku;
+    if ($sku === '') return;
+    $tabela = $wpdb->prefix . 'wc_product_meta_lookup';
+    // @phpcs:ignore WordPress.DB.DirectDatabaseQuery
+    $ids = (array) $wpdb->get_col($wpdb->prepare(
+        "SELECT product_id FROM {$tabela} WHERE sku = %s AND product_id <> %d", $sku, (int) $keep_id
+    ));
+    foreach ($ids as $pid) {
+        $pid = (int) $pid;
+        // Se o postmeta ainda tem o código, é dono de verdade: some pelo CRUD.
+        if ((string) get_post_meta($pid, '_sku', true) === $sku) {
+            $dono = wc_get_product($pid);
+            if ($dono) { $dono->set_sku(''); $dono->save(); }
+            else       { update_post_meta($pid, '_sku', ''); }
+        }
+        ojf_clear_sku_lookup($pid);
+        clean_post_cache($pid);
+    }
+    if ($ids && class_exists('WC_Cache_Helper')) WC_Cache_Helper::invalidate_cache_group('products');
+}
+
 /** Zera o sku na wc_product_meta_lookup — é ela que o Woo consulta para dizer
  *  "SKU inválido ou duplicado". O save() cuida disso quando há mudança; aqui
  *  garantimos também quando o postmeta já estava vazio e só o lookup ficou para trás. */
@@ -1041,6 +1074,9 @@ function ojf_create_product_handler($request) {
             // em vez de deixar um segundo produto nascer com o SKU novo.
             if ($adopted_from !== '' && $adopted_from !== $sku) {
                 ojf_release_sku_from_product($sku, $existing);
+                // E também quem só ficou no lookup, sem postmeta: é ele que faz
+                // o Woo recusar o código por um dono que já não existe.
+                ojf_release_sku_from_lookup($sku, $existing);
                 $product->set_sku($sku);
                 $product->update_meta_data('_ojf_previous_sku', $adopted_from);
                 error_log(sprintf('[ojf] adoção: produto #%d re-chaveado %s -> %s', $existing, $adopted_from, $sku));
