@@ -1,0 +1,920 @@
+/* ===== Meta box: Informações da Lista ===== */
+        .listas-field-group {
+            margin-bottom: 20px;
+        }
+        .listas-field-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            font-family: 'Montserrat', -apple-system, sans-serif;
+            color: #1d1d1f;
+        }
+        .listas-field-group input[type="text"],
+        .listas-field-group select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            font-family: 'Montserrat', -apple-system, sans-serif;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        .listas-field-group input[type="text"]:focus,
+        .listas-field-group select:focus {
+            outline: none;
+            border-color: #1d1d1f;
+            box-shadow: 0 0 0 3px rgba(29,29,31,0.1);
+        }
+        .listas-field-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .listas-field-row-3 {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            gap: 20px;
+        }
+
+/* ===== Meta box: Cupom de Desconto ===== */
+        .listas-cupom-field {
+            margin-bottom: 15px;
+        }
+        .listas-cupom-field label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            font-family: 'Montserrat', sans-serif;
+        }
+        .listas-cupom-field input[type="text"],
+        .listas-cupom-field input[type="number"],
+        .listas-cupom-field select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #d2d2d7;
+            border-radius: 6px;
+            font-family: 'Montserrat', sans-serif;
+        }
+        .listas-cupom-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #d2d2d7;
+        }
+        .listas-cupom-toggle input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+/* ===== Meta box: Ver Lista ===== */
+                .listas-ver-lista-btn {
+                    display: block;
+                    width: 100%;
+                    padding: 12px;
+                    background: linear-gradient(135deg, #34c759, #30d158);
+                    color: white;
+                    text-align: center;
+                    text-decoration: none;
+                    border-radius: 8px;
+                    font-weight: 600;
+                    font-family: 'Montserrat', sans-serif;
+                    transition: all 0.2s ease;
+                    border: none;
+                    cursor: pointer;
+                }
+                .listas-ver-lista-btn:hover {
+                    background: linear-gradient(135deg, #2ebc54, #2ac950);
+                    transform: translateY(-2px);
+                    box-shadow: 0 4px 12px rgba(52, 199, 89, 0.3);
+                    color: white;
+                }
+                .listas-ver-lista-info {
+                    margin-top: 10px;
+                    padding: 10px;
+                    background: #f5f5f7;
+                    border-radius: 6px;
+                    font-size: 12px;
+                    color: #666;
+                }
+            .listas-ver-lista-aviso {
+                padding: 12px;
+                background: #fff3cd;
+                border: 1px solid #ffc107;
+                border-radius: 6px;
+                color: #856404;
+                font-size: 13px;
+                text-align: center;
+            }
+
+/* ===== Meta box: Produtos da Lista (grid, cards, modal de similares) ===== */
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap');
+        
+        #listas-produtos-container {
+            font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;
+            padding: 20px 0;
+        }
+        
+        .listas-search-section {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #d2d2d7;
+            margin-bottom: 20px;
+        }
+        
+        .listas-search-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            font-family: 'Montserrat', sans-serif;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            background: #f5f5f7;
+        }
+        
+        .listas-search-input:focus {
+            outline: none;
+            border-color: #1d1d1f;
+            background: #ffffff;
+            box-shadow: 0 0 0 3px rgba(29,29,31,0.1);
+        }
+        
+        .listas-produtos-grid {
+            background: #ffffff;
+            border-radius: 12px;
+            border: 1px solid #d2d2d7;
+            overflow: hidden;
+        }
+        
+        .listas-produto-item {
+            display: grid;
+            grid-template-columns: 60px 2fr 1fr auto 40px;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 20px;
+            border-bottom: 1px solid #f5f5f7;
+            transition: all 0.2s ease;
+        }
+        
+        /* Variação: recuada sob o pai, com um fio ligando os dois. A hierarquia
+           é o que diz de qual produto aquele "N° 18L" é. */
+        .listas-produto-item--variacao {
+            margin-left: 26px;
+            position: relative;
+        }
+        .listas-produto-item--variacao::before {
+            content: "";
+            position: absolute;
+            left: -14px;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: #d6dde0;
+        }
+        .listas-produto-item--variacao::after {
+            content: "";
+            position: absolute;
+            left: -14px;
+            top: 50%;
+            width: 10px;
+            height: 1px;
+            background: #d6dde0;
+        }
+
+        .listas-produto-item.added-item {
+            grid-template-columns: 30px 60px 2fr 1fr auto 40px 40px;
+        }
+        
+        .listas-produto-item.ui-sortable-helper {
+            background: #fff;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-radius: 8px;
+        }
+        
+        .listas-produto-item.ui-sortable-placeholder {
+            visibility: visible !important;
+            background: #e5f7ea;
+            border: 2px dashed #34c759;
+            border-radius: 8px;
+            height: 70px;
+        }
+        
+        .listas-produto-drag {
+            color: #ccc;
+            cursor: grab;
+            font-size: 16px;
+            padding: 4px 8px;
+            user-select: none;
+            transition: color 0.2s;
+            text-align: center;
+        }
+        
+        .listas-produto-drag:hover {
+            color: #666;
+        }
+        
+        .listas-produto-drag:active {
+            cursor: grabbing;
+        }
+        
+        .listas-produto-remove-btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            background: #fee2e2;
+            color: #dc2626;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .listas-produto-remove-btn:hover {
+            background: #dc2626;
+            color: white;
+        }
+        
+        .listas-produto-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        
+        .listas-produto-item:hover {
+            background: #f5f5f7;
+        }
+        
+        .listas-produto-item:last-child {
+            border-bottom: none;
+        }
+        
+        .listas-produto-item.added-item {
+            background: #e5f7ea;
+            order: -1;
+        }
+        
+        .listas-produto-image-small {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            background: #f5f5f7;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        
+        .listas-produto-image-small img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        
+        .listas-produto-info-horizontal {
+            min-width: 0;
+        }
+        
+        .listas-produto-title-horizontal {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin: 0 0 4px 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .listas-produto-id {
+            font-size: 11px;
+            color: #86868b;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+        
+        .listas-produto-price-horizontal {
+            font-size: 16px;
+            font-weight: 700;
+            color: #1d1d1f;
+            text-align: right;
+        }
+        
+        .listas-produto-btn-horizontal {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            background: #1d1d1f;
+            color: #ffffff;
+            font-family: 'Montserrat', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+        
+        .listas-produto-btn-horizontal:hover:not(:disabled) {
+            background: #000000;
+            transform: scale(1.05);
+        }
+        
+        .listas-produto-btn-horizontal.added {
+            background: #34c759;
+            cursor: default;
+        }
+        
+        .listas-produto-btn-horizontal:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .listas-produto-eye-btn {
+            width: 32px;
+            height: 32px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            background: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            padding: 0;
+        }
+        
+        .listas-produto-eye-btn:hover {
+            background: #f5f5f7;
+            border-color: #1d1d1f;
+            transform: scale(1.1);
+        }
+        
+        .listas-produto-eye-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: #1d1d1f;
+        }
+        
+        .listas-loading,
+        .listas-empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: #86868b;
+            font-size: 16px;
+            font-weight: 500;
+        }
+        
+        /* Botão de produtos similares */
+        .listas-btn-similares {
+            padding: 6px 12px;
+            border: 1px solid #d2d2d7;
+            border-radius: 6px;
+            background: #f8f9fa;
+            color: #6c757d;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+        
+        .listas-btn-similares:hover {
+            background: #e9ecef;
+            border-color: #34c759;
+            color: #34c759;
+        }
+        
+        /* Modal de produtos similares */
+        .listas-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 100000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .listas-modal-content {
+            background: #ffffff;
+            border-radius: 16px;
+            width: 100%;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        .listas-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e5e5;
+            background: #f8f9fa;
+        }
+        
+        .listas-modal-header h3 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 700;
+            color: #1d1d1f;
+        }
+        
+        .listas-modal-close {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: #e5e5e5;
+            border-radius: 50%;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: #666;
+        }
+        
+        .listas-modal-close:hover {
+            background: #ff3b30;
+            color: white;
+        }
+        
+        .listas-modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        
+        .listas-modal-body h4 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: #666;
+        }
+        
+        .listas-similares-search-section {
+            margin-bottom: 24px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid #e5e5e5;
+        }
+        
+        .listas-bulk-import-textarea {
+            width: 100%;
+            height: 300px;
+            padding: 12px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            font-family: 'Montserrat', sans-serif;
+            font-size: 13px;
+            resize: vertical;
+            transition: all 0.2s ease;
+        }
+        
+        .listas-bulk-import-textarea:focus {
+            outline: none;
+            border-color: #1d1d1f;
+            box-shadow: 0 0 0 3px rgba(29,29,31,0.1);
+        }
+        
+        .listas-btn-bulk-import {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            background: #1d1d1f;
+            color: white;
+            font-family: 'Montserrat', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .listas-btn-bulk-import:hover:not(:disabled) {
+            background: #000;
+            transform: scale(1.02);
+        }
+        
+        .listas-btn-bulk-import:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .listas-similares-results {
+            margin-top: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+        }
+        
+        .listas-similares-results:empty {
+            display: none;
+        }
+        
+        .listas-similar-result-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            transition: background 0.2s;
+        }
+        
+        .listas-similar-result-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .listas-similar-result-item:last-child {
+            border-bottom: none;
+        }
+        
+        .listas-similar-result-item.already-added {
+            background: #e5f7ea;
+        }
+        
+        .listas-similar-result-item img {
+            width: 40px;
+            height: 40px;
+            object-fit: contain;
+            border-radius: 6px;
+            background: #f5f5f5;
+        }
+        
+        .listas-similar-result-info {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .listas-similar-result-info strong {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #1d1d1f;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .listas-similar-result-info span {
+            font-size: 11px;
+            color: #86868b;
+        }
+        
+        .listas-add-similar-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            background: #1d1d1f;
+            color: white;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        
+        .listas-add-similar-btn:hover:not(:disabled) {
+            background: #000;
+            transform: scale(1.02);
+        }
+        
+        .listas-add-similar-btn.added {
+            background: #34c759;
+            cursor: default;
+        }
+        
+        .listas-add-similar-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+        
+        .listas-similares-list {
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .listas-similar-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            background: white;
+            transition: background 0.2s;
+        }
+        
+        .listas-similar-row:hover {
+            background: #f8f9fa;
+        }
+        
+        .listas-similar-row:last-child {
+            border-bottom: none;
+        }
+        
+        .listas-similar-row.ui-sortable-helper {
+            background: #fff;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-radius: 8px;
+        }
+        
+        .listas-similar-row.ui-sortable-placeholder {
+            visibility: visible !important;
+            background: #e5f7ea;
+            border: 2px dashed #34c759;
+            border-radius: 8px;
+        }
+        
+        .listas-similar-drag {
+            color: #ccc;
+            cursor: grab;
+            font-size: 16px;
+            padding: 4px 8px;
+            user-select: none;
+            transition: color 0.2s;
+        }
+        
+        .listas-similar-drag:hover {
+            color: #666;
+        }
+        
+        .listas-similar-drag:active {
+            cursor: grabbing;
+        }
+        
+        .listas-similar-thumb {
+            width: 40px;
+            height: 40px;
+            object-fit: contain;
+            border-radius: 6px;
+            background: #f5f5f5;
+        }
+        
+        .listas-similar-info {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .listas-similar-info strong {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #1d1d1f;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .listas-similar-info span {
+            font-size: 11px;
+            color: #86868b;
+        }
+        
+        .listas-remove-similar {
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: #fee2e2;
+            color: #dc2626;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .listas-remove-similar:hover {
+            background: #dc2626;
+            color: white;
+        }
+        
+        .listas-no-similares,
+        .listas-no-results {
+            padding: 30px 20px;
+            text-align: center;
+            color: #86868b;
+            font-size: 14px;
+        }
+        
+        .listas-modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid #e5e5e5;
+            background: #f8f9fa;
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+        
+        .listas-modal-btn-close {
+            padding: 10px 20px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            background: white;
+            color: #1d1d1f;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .listas-modal-btn-close:hover {
+            background: #f5f5f5;
+        }
+        
+        @media (max-width: 1024px) {
+            .listas-produto-item {
+                grid-template-columns: 50px 2fr 80px 80px 32px;
+                gap: 12px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .listas-produto-item {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+                padding: 16px;
+                border-bottom: 1px solid #e0e0e0;
+            }
+            
+            .listas-produto-item.added-item {
+                display: flex;
+                flex-direction: column;
+            }
+            
+            .listas-produto-drag {
+                display: none;
+            }
+            
+            .listas-produto-image-small {
+                width: 100%;
+                height: 200px;
+                margin: 0 auto;
+            }
+            
+            .listas-produto-info-horizontal {
+                width: 100%;
+            }
+            
+            .listas-produto-title-horizontal {
+                font-size: 16px;
+                white-space: normal;
+                margin-bottom: 8px;
+            }
+            
+            .listas-produto-id {
+                font-size: 12px;
+                margin-bottom: 8px;
+            }
+            
+            .listas-produto-price-horizontal {
+                text-align: left;
+                font-size: 18px;
+                margin: 8px 0;
+            }
+            
+            .listas-produto-actions {
+                width: 100%;
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .listas-produto-btn-horizontal,
+            .listas-btn-similares {
+                width: 100%;
+                padding: 12px;
+                font-size: 14px;
+            }
+            
+            .listas-produto-eye-btn,
+            .listas-produto-remove-btn {
+                width: 100%;
+                height: 44px;
+            }
+            
+            /* Modal de produtos similares - Mobile */
+            .listas-modal-content {
+                max-width: 100%;
+                max-height: 100vh;
+                border-radius: 0;
+                margin: 0;
+            }
+            
+            .listas-similar-row {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+                padding: 16px;
+            }
+            
+            .listas-similar-drag {
+                display: none;
+            }
+            
+            .listas-similar-thumb {
+                width: 100%;
+                height: 200px;
+                margin: 0 auto;
+            }
+            
+            .listas-similar-info {
+                width: 100%;
+            }
+            
+            .listas-similar-info strong {
+                font-size: 16px;
+                white-space: normal;
+                display: block;
+                margin-bottom: 8px;
+            }
+            
+            .listas-similar-info span {
+                font-size: 12px;
+                display: block;
+                margin-bottom: 12px;
+            }
+            
+            .listas-remove-similar {
+                width: 100%;
+                height: 44px;
+                margin-top: 8px;
+            }
+            
+            .listas-similar-result-item {
+                flex-direction: column;
+                gap: 12px;
+                padding: 16px;
+            }
+            
+            .listas-similar-result-item img {
+                width: 100%;
+                height: 200px;
+            }
+            
+            .listas-similar-result-info {
+                width: 100%;
+            }
+            
+            .listas-similar-result-info strong {
+                font-size: 16px;
+                white-space: normal;
+                display: block;
+                margin-bottom: 8px;
+            }
+            
+            .listas-similar-result-info span {
+                font-size: 12px;
+                display: block;
+                margin-bottom: 12px;
+            }
+            
+            .listas-add-similar-btn {
+                width: 100%;
+                padding: 14px;
+                font-size: 14px;
+            }
+        }
+
+/* Divisor entre produtos da lista e produtos sugeridos */
+.listas-produtos-divider {
+    margin: 18px 0 10px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: #64748b;
+    background: #f1f5f9;
+    border-radius: 8px;
+    border-left: 4px solid #cbd5e1;
+}
+
+/* Item da lista que fixou uma variação específica (>= 2.1.0) */
+.listas-badge-variacao {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: #e6f4ea;
+    color: #137333;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+.listas-produto-medidas {
+    margin-top: 3px;
+    font-size: 11px;
+    color: #6b7280;
+}

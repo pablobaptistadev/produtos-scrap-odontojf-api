@@ -42,7 +42,7 @@
         "max_retries": 5,
         "dead_letter_queue": "odontojf-sync-dlq",
         "max_batch_timeout": 10,
-        "max_concurrency": 10
+        "max_concurrency": 5
       }
     ]
   },
@@ -51,14 +51,42 @@
     "SCRAPE_SITEMAP_PATH": "/api/sitemap/products",
     "SCRAPE_USER_AGENT": "Mozilla/5.0 (compatible; OdontoJfSync/1.0; +https://odontoapi.wpatomic.com.br)",
     "ERP_BASE_URL": "http://45.227.82.180:8082/ecommerceapi/v1",
-    "WOO_BASE_URL": "https://odonto.wpatomic.com.br",
+    // Effective target in production (confirmed via GET /version). The old
+    // value here pointed at odonto.wpatomic.com.br — deploying with that set
+    // would have repointed the push at the wrong store, since vars in this
+    // file overwrite whatever is configured in the dashboard.
+    "WOO_BASE_URL": "https://dentalodontocirurgica.com.br",
     "REBUILD_INTERVAL_HOURS": "24",
-    "DRAIN_BATCH_SIZE": "20",
+    // Vazão do dreno. 60 derrubou o banco do WordPress em 06/09 (522 + "erro ao
+    // estabelecer conexão"): antes do disjuntor do ERP quase nada chegava no push,
+    // então a loja nunca tinha sentido a vazão real do pipeline. Nem 20 se sustenta
+    // — a fila do WP conclui ~4 jobs/min (produto variável com dezenas de variações
+    // e upload de imagem), então acima disso o backlog lá dentro só cresce. Em 5 o
+    // WordPress drena mais do que recebe.
+    "DRAIN_BATCH_SIZE": "5",
     "REQUEST_TIMEOUT_MS": "15000",
     "LOG_LEVEL": "INFO",
     "MEDIA_PUBLIC_BASE_URL": "https://media.odontoapi.wpatomic.com.br",
     "AUTO_ENQUEUE_ERP": "1",
     "AUTO_ENQUEUE_MERGE": "1",
+    // Gates that were only set in the dashboard, so they were missing here.
+    // Values below match observed production behaviour (media runs and pushes
+    // happen). CONFIRM against the dashboard before the first deploy — these
+    // overwrite it. SCRAPE_AUTO_MIRROR is deliberately left unset: its default
+    // when absent is already "on".
+    "AUTO_ENQUEUE_MEDIA": "1",
+    "WOO_PUSH_ENABLED": "1",
+    // O ERP está fora do ar desde 04/09. "store" publica conteúdo (título,
+    // descrição, galeria) SEM enviar preço nem estoque: o payload não carrega
+    // essas chaves e o plugin só as grava sob isset(), então a loja mantém os
+    // próprios valores. Voltar para "erp" quando o ERP normalizar.
+    "WOO_PUSH_PRICING": "store",
+
+    // ERP fora do ar desde 04/09. Sem disjuntor, cada linha da fila pagava o
+    // timeout inteiro e o tick do cron acabava antes de drenar qualquer coisa.
+    // Timeout curto para a sondagem, e 10 min de janela fechada depois dela.
+    "ERP_TIMEOUT_MS": "6000",
+    "ERP_DOWN_TTL_SEC": "600",
     "ERP_FILIAL_CODIGO": "1"
   },
   "triggers": {

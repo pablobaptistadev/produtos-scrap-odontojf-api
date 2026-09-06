@@ -312,3 +312,200 @@ describe("mergeScrapeAndErp — sale price", () => {
     expect(merged.sale_price).toBeNull();
   });
 });
+
+describe("mergeScrapeAndErp — offers (de/por)", () => {
+  const offerScrape: any = {
+    ...baseScrape,
+    price: "178.00",
+    price_text: "R$ 178,00",
+    old_price: "187.74",
+    old_price_text: "R$ 187,74",
+    discount: 5,
+    bigger_discount: null,
+  };
+
+  it("erp-ok + offer, ERP below 'de' → regular='de', sale=ERP", () => {
+    const merged = mergeScrapeAndErp({
+      sku: "SKU-O1",
+      scrape: offerScrape,
+      erp: { codigo: "SKU-O1", preco: 170 },
+    });
+    expect(merged.regular_price).toBe("187.74");
+    expect(merged.sale_price).toBe("170.00");
+  });
+
+  it("erp-ok + offer, ERP at/above 'de' (SKU 37 case) → sale dropped", () => {
+    const merged = mergeScrapeAndErp({
+      sku: "SKU-O2",
+      scrape: offerScrape,
+      erp: { codigo: "SKU-O2", preco: 191.8 },
+    });
+    expect(merged.regular_price).toBe("187.74");
+    expect(merged.sale_price).toBeNull();
+    expect(merged.warnings.some((w) => w.includes("sale dropped"))).toBe(true);
+  });
+
+  it("erp_failed + offer → mirrors the origin de/por", () => {
+    const merged = mergeScrapeAndErp({ sku: "SKU-O3", scrape: offerScrape, erp: null });
+    expect(merged.regular_price).toBe("187.74");
+    expect(merged.sale_price).toBe("178.00");
+    expect(merged.meta_data.find((m) => m.key === "_odontojf_old_price_text")?.value).toBe("R$ 187,74");
+    expect(merged.meta_data.find((m) => m.key === "_odontojf_discount")?.value).toBe("5");
+  });
+
+  it("erp_failed, no offer → regular=current price, no sale", () => {
+    const merged = mergeScrapeAndErp({
+      sku: "SKU-O4",
+      scrape: { ...baseScrape, price: "178.00" },
+      erp: null,
+    });
+    expect(merged.regular_price).toBe("178.00");
+    expect(merged.sale_price).toBeNull();
+    expect(merged.meta_data.find((m) => m.key === "_odontojf_old_price_text")).toBeUndefined();
+  });
+
+  it("old_price equal to price (discount 0) is not an offer", () => {
+    const merged = mergeScrapeAndErp({
+      sku: "SKU-O5",
+      scrape: { ...baseScrape, price: "100.00", old_price: "100.00", discount: 0 },
+      erp: null,
+    });
+    expect(merged.regular_price).toBe("100.00");
+    expect(merged.sale_price).toBeNull();
+  });
+
+  it("propagates de/por to variations (parent stays regular = min current)", () => {
+    const offerVariableScrape: any = {
+      ...baseScrape,
+      type: "variable",
+      images: [{ src: "https://cdn.example/parent.jpg", alt: null }],
+      variations: [
+        {
+          id: "v1", sku: "V1", name: "A1",
+          provider_code: null, barcode: null,
+          price: "120.00", price_text: "R$ 120,00",
+          old_price: "149.18", old_price_text: "R$ 149,18", discount: 10, bigger_discount: null,
+          stock_status: "in_stock", stock_qty: 5,
+          dimensions: { weight: null, length: null, width: null, height: null },
+          images: [],
+        },
+        {
+          id: "v2", sku: "V2", name: "B1",
+          provider_code: null, barcode: null,
+          price: "59.99", price_text: "R$ 59,99",
+          old_price: null, old_price_text: null, discount: null, bigger_discount: null,
+          stock_status: "in_stock", stock_qty: 2,
+          dimensions: { weight: null, length: null, width: null, height: null },
+          images: [],
+        },
+      ],
+    };
+    const merged = mergeScrapeAndErp({ sku: "V1", scrape: offerVariableScrape, erp: null });
+    const a1 = merged.variations.find((v) => v.name === "A1")!;
+    expect(a1.regular_price).toBe("149.18");
+    expect(a1.sale_price).toBe("120.00");
+    expect(a1.meta_data.find((m) => m.key === "_odontojf_old_price_text")?.value).toBe("R$ 149,18");
+    // variation without an offer keeps regular = current price, no sale
+    const b1 = merged.variations.find((v) => v.name === "B1")!;
+    expect(b1.regular_price).toBe("59.99");
+    expect(b1.sale_price).toBeNull();
+  });
+});
+
+describe("mergeScrapeAndErp — faithful variations (title / description / gallery)", () => {
+  const variableScrape: any = {
+    ...baseScrape,
+    type: "variable",
+    title: "Fórceps Adulto",
+    images: [{ src: "https://cdn.example/parent.jpg", alt: null }],
+    variations: [
+      {
+        id: "GOL83-16",
+        sku: "411",
+        name: "N°150",
+        title: "Fórceps Adulto N°150",
+        description: "<p>O Fórceps n° 150 é indicado para pré-molares superiores.</p>",
+        slug: "forceps-odontologico-150-adulto-golgran-83-16",
+        provider_code: "83-16",
+        price: "105.63",
+        price_text: null,
+        old_price: null,
+        old_price_text: null,
+        discount: null,
+        bigger_discount: null,
+        stock_status: "in_stock",
+        stock_qty: 3,
+        barcode: null,
+        dimensions: { weight: null, length: null, width: null, height: null },
+        images: [
+          { src: "https://cdn.example/150-a.jpg", alt: null },
+          { src: "https://cdn.example/150-b.jpg", alt: null },
+          { src: "https://cdn.example/150-c.jpg", alt: null },
+        ],
+      },
+      {
+        // No image of its own: falls back to the parent for the thumbnail and
+        // carries an empty gallery.
+        id: "GOL83-18",
+        sku: "414",
+        name: "N°151",
+        title: null,
+        description: null,
+        slug: null,
+        provider_code: null,
+        price: "105.63",
+        price_text: null,
+        old_price: null,
+        old_price_text: null,
+        discount: null,
+        bigger_discount: null,
+        stock_status: "in_stock",
+        stock_qty: 1,
+        barcode: null,
+        dimensions: { weight: null, length: null, width: null, height: null },
+        images: [],
+      },
+    ],
+  };
+
+  it("carries the child's own title and description onto the variation", () => {
+    const merged = mergeScrapeAndErp({ sku: "3184", scrape: variableScrape, erp: null });
+    const v150 = merged.variations.find((v) => v.sku === "411");
+    expect(v150?.title).toBe("Fórceps Adulto N°150");
+    expect(v150?.description).toContain("pré-molares superiores");
+    // `name` stays the selector label — it is the variation axis option.
+    expect(v150?.name).toBe("N°150");
+    expect(v150?.attributes).toEqual([{ name: "Variação", option: "N°150" }]);
+  });
+
+  it("keeps the full gallery and points `image` at the first entry", () => {
+    const merged = mergeScrapeAndErp({ sku: "3184", scrape: variableScrape, erp: null });
+    const v150 = merged.variations.find((v) => v.sku === "411");
+    expect(v150?.images).toHaveLength(3);
+    expect(v150?.images.map((i) => i.src)).toEqual([
+      "https://cdn.example/150-a.jpg",
+      "https://cdn.example/150-b.jpg",
+      "https://cdn.example/150-c.jpg",
+    ]);
+    // Backwards compatibility: single-image consumers still work.
+    expect(v150?.image?.src).toBe("https://cdn.example/150-a.jpg");
+  });
+
+  it("falls back to the parent image when a variation has none, with an empty gallery", () => {
+    const merged = mergeScrapeAndErp({ sku: "3184", scrape: variableScrape, erp: null });
+    const v151 = merged.variations.find((v) => v.sku === "414");
+    expect(v151?.images).toEqual([]);
+    expect(v151?.image?.src).toBe("https://cdn.example/parent.jpg");
+    expect(v151?.title).toBeNull();
+    expect(v151?.description).toBeNull();
+  });
+
+  it("exposes title and slug as meta so the storefront can render them", () => {
+    const merged = mergeScrapeAndErp({ sku: "3184", scrape: variableScrape, erp: null });
+    const v150 = merged.variations.find((v) => v.sku === "411");
+    const byKey = Object.fromEntries((v150?.meta_data ?? []).map((m) => [m.key, m.value]));
+    expect(byKey._odontojf_variation_title).toBe("Fórceps Adulto N°150");
+    expect(byKey._odontojf_variation_slug).toBe("forceps-odontologico-150-adulto-golgran-83-16");
+    expect(byKey._odontojf_scrape_id).toBe("GOL83-16");
+  });
+});

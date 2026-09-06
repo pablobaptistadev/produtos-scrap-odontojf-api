@@ -83,10 +83,13 @@ describe("parseProductHtml — simple product (Dispensador Pistola Universal)", 
   });
 
   it("does not have detected_sku before API enrichment (parser only)", () => {
-    // detected_sku and price are populated by enrichWithSpecificData
+    // detected_sku, price and offer fields are populated by enrichWithSpecificData
     expect(result.detected_sku).toBeNull();
     expect(result.price).toBeNull();
     expect(result.stock_qty).toBeNull();
+    expect(result.old_price).toBeNull();
+    expect(result.old_price_text).toBeNull();
+    expect(result.discount).toBeNull();
     expect(result.api_enriched).toBe(false);
   });
 
