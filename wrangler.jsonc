@@ -57,11 +57,13 @@
     // file overwrite whatever is configured in the dashboard.
     "WOO_BASE_URL": "https://dentalodontocirurgica.com.br",
     "REBUILD_INTERVAL_HOURS": "24",
-    // 60 derrubou o banco do WordPress em 06/09 (522 + "erro ao estabelecer
-    // conexão"): antes do disjuntor do ERP quase nada chegava no push, então a
-    // loja nunca tinha sentido a vazão real. De volta ao 20 de sempre, com a
-    // concorrência da fila em 5.
-    "DRAIN_BATCH_SIZE": "20",
+    // Vazão do dreno. 60 derrubou o banco do WordPress em 06/09 (522 + "erro ao
+    // estabelecer conexão"): antes do disjuntor do ERP quase nada chegava no push,
+    // então a loja nunca tinha sentido a vazão real do pipeline. Nem 20 se sustenta
+    // — a fila do WP conclui ~4 jobs/min (produto variável com dezenas de variações
+    // e upload de imagem), então acima disso o backlog lá dentro só cresce. Em 5 o
+    // WordPress drena mais do que recebe.
+    "DRAIN_BATCH_SIZE": "5",
     "REQUEST_TIMEOUT_MS": "15000",
     "LOG_LEVEL": "INFO",
     "MEDIA_PUBLIC_BASE_URL": "https://media.odontoapi.wpatomic.com.br",
