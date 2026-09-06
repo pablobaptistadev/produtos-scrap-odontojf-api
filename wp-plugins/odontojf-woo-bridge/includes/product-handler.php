@@ -287,6 +287,16 @@ function ojf_parent_variation_codes($parent_id) {
  * e isso leva os anexos e os objetos no R2 junto pelo hook delete_attachment.
  * Na adoção o detentor é um produto VIVO com fotos — aqui só zeramos o `_sku`.
  */
+/** Zera o sku na wc_product_meta_lookup — é ela que o Woo consulta para dizer
+ *  "SKU inválido ou duplicado". O save() cuida disso quando há mudança; aqui
+ *  garantimos também quando o postmeta já estava vazio e só o lookup ficou para trás. */
+function ojf_clear_sku_lookup($pid) {
+    global $wpdb;
+    $tabela = $wpdb->prefix . 'wc_product_meta_lookup';
+    // @phpcs:ignore WordPress.DB.DirectDatabaseQuery
+    $wpdb->update($tabela, ['sku' => ''], ['product_id' => (int) $pid], ['%s'], ['%d']);
+}
+
 function ojf_release_sku_from_product($sku, $keep_id = 0) {
     $sku = (string) $sku;
     if ($sku === '') return;
@@ -303,7 +313,15 @@ function ojf_release_sku_from_product($sku, $keep_id = 0) {
             $v = wc_get_product($pid);
             if ($v) { $v->set_sku($sku . '-v' . $pid); $v->save(); }
         } else {
-            update_post_meta($pid, '_sku', '');
+            // Pelo CRUD, NÃO por update_post_meta: o Woo valida SKU duplicado
+            // contra a tabela wc_product_meta_lookup, e só o save() do produto
+            // atualiza essa tabela. Zerando só o postmeta, o lookup continuava
+            // com o código e o save do canônico morria em "SKU inválido ou
+            // duplicado" — foi o que travou #773421 e #770465.
+            $dono = wc_get_product($pid);
+            if ($dono) { $dono->set_sku(''); $dono->save(); }
+            else       { update_post_meta($pid, '_sku', ''); }
+            ojf_clear_sku_lookup($pid);
             update_post_meta($pid, '_ojf_sku_released', $sku);
             if (function_exists('wc_delete_product_transients')) wc_delete_product_transients($pid);
         }
@@ -435,7 +453,9 @@ function ojf_absorb_duplicate($twin_id, $canonical_id) {
         error_log('[ojf] ' . $msg);
         return $msg;
     }
-    update_post_meta($twin_id, '_sku', '');
+    $gemeo = wc_get_product($twin_id);
+    if ($gemeo && (string) $gemeo->get_sku() !== '') { $gemeo->set_sku(''); $gemeo->save(); }
+    ojf_clear_sku_lookup($twin_id);
     update_post_meta($twin_id, '_ojf_duplicate_of', (int) $canonical_id);
     update_post_meta($twin_id, '_ojf_duplicate_at', current_time('mysql'));
     wp_update_post(['ID' => $twin_id, 'post_status' => 'draft']);
