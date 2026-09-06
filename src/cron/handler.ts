@@ -48,7 +48,12 @@ export async function handleScheduled(_event: ScheduledController, env: Env, _ct
 
   // Settle products whose WP-side job finished after we handed it over.
   try {
-    const settled = await reconcileWooQueue(env, drainSize);
+    // A reconciliação é um GET barato no /queue-status por linha, nada a ver com
+    // o custo de um push. Amarrada ao DRAIN_BATCH_SIZE (5), ela levava horas para
+    // alcançar a realidade: o WordPress já tinha terminado 1.648 produtos e o D1
+    // ainda os mostrava "na fila" — e foi esse atraso que eu reportei como
+    // trabalho faltando.
+    const settled = await reconcileWooQueue(env, parseIntEnv(env.RECONCILE_BATCH_SIZE, 200));
     if (settled > 0) {
       await recordSyncEvent(env, {
         stage: "cron",

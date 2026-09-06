@@ -59,6 +59,8 @@ export interface Env {
   WOO_PUSH_INCLUDE_ERP_FAILED?: string;
   /** Com "1", empurra mesmo sem mudança desde o último push bem-sucedido. */
   WOO_PUSH_FORCE?: string;
+  /** Linhas do WP reconciliadas por tick do cron. Independe do DRAIN_BATCH_SIZE. */
+  RECONCILE_BATCH_SIZE?: string;
 
   /** Where price and stock come from on push.
    *  "erp" (default) — the ERP is the source; a product without ERP data is skipped.
