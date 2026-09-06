@@ -1,4 +1,4 @@
-# OdontoJF Woo Bridge — v1.0.59
+# OdontoJF Woo Bridge — v1.0.60
 
 Plugin WordPress que recebe os produtos do Worker OdontoJF numa **fila própria** (com
 timing/retry), cria/atualiza no WooCommerce com **atributos manuais** (não globais),

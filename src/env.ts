@@ -32,6 +32,14 @@ export interface Env {
   ERP_SENHA?: string;
   /** filialCodigo sent on the auth body (matches the storefront plugin). */
   ERP_FILIAL_CODIGO?: string;
+  /** Timeout das chamadas ao ERP. Separado do REQUEST_TIMEOUT_MS: com o ERP fora,
+   *  15s por linha consumia o tick inteiro do cron. */
+  ERP_TIMEOUT_MS?: string;
+  /** Quanto tempo o disjuntor fica aberto depois de uma falha de rede (segundos). */
+  ERP_DOWN_TTL_SEC?: string;
+  /** Com "1", falha do ERP não trava o produto: ele segue para merge/media/push.
+   *  Implícito quando WOO_PUSH_PRICING=store (aí o preço vem da loja). */
+  ERP_OPTIONAL?: string;
 
   WOO_BASE_URL: string;
   WOO_CONSUMER_KEY?: string;

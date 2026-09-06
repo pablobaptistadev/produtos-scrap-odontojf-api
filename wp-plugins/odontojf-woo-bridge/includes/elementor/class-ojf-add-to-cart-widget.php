@@ -57,9 +57,9 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
 
         $this->add_control('mostrar_preco', array(
             'label' => esc_html__('Mostrar o preço', 'odontojf'),
-            'description' => esc_html__('Imprime o preço dentro do widget. Em produto simples é o preço dele; em variável começa na faixa do pai e passa a seguir a variação escolhida. Ligue quando a página não tiver outro elemento de preço.', 'odontojf'),
+            'description' => esc_html__('Imprime o preço dentro do widget. Em produto simples é o preço dele; em variável começa na faixa do pai e passa a seguir a variação escolhida. Com isto ligado o preço do bloco de variação do WooCommerce fica escondido, para não sair duplicado.', 'odontojf'),
             'type' => \Elementor\Controls_Manager::SWITCHER,
-            'default' => '',
+            'default' => 'yes',
         ));
 
         $this->add_control('ocultar_preco_variacao', array(
@@ -589,7 +589,10 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
         $GLOBALS['product'] = $product;
 
         $classes = array('ojf-atc');
-        if ($settings['ocultar_preco_variacao'] === 'yes')    $classes[] = 'ojf-atc--sem-preco';
+        // Com o preço do widget ligado, o do bloco de variação sempre sai de cena:
+        // o nosso já acompanha a seleção, e dois preços na tela é pior que nenhum.
+        if ($settings['mostrar_preco'] === 'yes'
+            || $settings['ocultar_preco_variacao'] === 'yes') $classes[] = 'ojf-atc--sem-preco';
         if ($settings['ocultar_descricao_variacao'] === 'yes') $classes[] = 'ojf-atc--sem-descricao';
         if ($settings['ajax'] === 'yes')                       $classes[] = 'ojf-atc--ajax';
         if ($settings['layout_lado_a_lado'] === 'yes')         $classes[] = 'ojf-atc--lado';

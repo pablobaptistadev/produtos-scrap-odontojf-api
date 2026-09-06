@@ -181,26 +181,88 @@ export async function runScrapeStage(env: Env, sku: string, url: string): Promis
   }
 }
 
+const ERP_DOWN_KEY = "erp_down_until";
+
+/** O ERP está em janela de "fora do ar"? */
+async function erpIsDown(env: Env): Promise<boolean> {
+  const until = await getAppState(env, ERP_DOWN_KEY);
+  if (!until) return false;
+  return Date.parse(until) > Date.now();
+}
+
+async function erpMarkDown(env: Env): Promise<void> {
+  const ttl = parseIntEnv(env.ERP_DOWN_TTL_SEC, 300);
+  await setAppState(env, ERP_DOWN_KEY, new Date(Date.now() + ttl * 1000).toISOString());
+}
+
+async function erpMarkUp(env: Env): Promise<void> {
+  const until = await getAppState(env, ERP_DOWN_KEY);
+  if (until) await setAppState(env, ERP_DOWN_KEY, "");
+}
+
+/** Falha de rede (timeout/conexão) — o ERP inteiro está fora, não é este SKU. */
+function looksLikeErpOutage(reason: string): boolean {
+  return /timeout|timed out|econn|network|socket|refused|unreach|closed/i.test(reason);
+}
+
+/** O produto pode seguir o pipeline sem o ERP? */
+function erpIsOptional(env: Env): boolean {
+  if (isFlagOn(env.ERP_OPTIONAL)) return true;
+  // Com o preço vindo da loja, o ERP não acrescenta nada ao push.
+  return (env.WOO_PUSH_PRICING ?? "erp").toLowerCase() === "store";
+}
+
 export async function runErpStage(env: Env, sku: string): Promise<void> {
   const product = await getProductBySku(env, sku);
   const lookupSku = product?.external_sku ?? sku;
+  const optional = erpIsOptional(env);
+
+  const seguir = async () => {
+    if (isFlagOn(env.AUTO_ENQUEUE_MERGE)) {
+      await enqueueStage(env, { stage: "merge", sku });
+    }
+  };
+
+  // DISJUNTOR. Com o ERP fora, cada linha pagava o timeout inteiro e o tick do
+  // cron acabava antes de drenar qualquer coisa: a fila parava de andar mesmo
+  // com scrape e merge saudáveis. Dentro da janela, nem tenta.
+  if (await erpIsDown(env)) {
+    const reason = "ERP fora do ar (disjuntor aberto) — produto segue sem dado do ERP";
+    await updateErpResult(env, sku, { status: "skipped", error: reason });
+    await recordSyncEvent(env, { sku, stage: "erp", level: "warn", message: reason });
+    await seguir();
+    return;
+  }
+
   const result = await fetchProductFromErp(env, lookupSku);
   if (result.status === "skipped") {
     await updateErpResult(env, sku, { status: "skipped", error: result.reason });
     await recordSyncEvent(env, { sku, stage: "erp", level: "warn", message: result.reason });
-    if (isFlagOn(env.AUTO_ENQUEUE_MERGE)) {
-      await enqueueStage(env, { stage: "merge", sku });
-    }
+    await seguir();
     return;
   }
   if (result.status === "failed") {
     await updateErpResult(env, sku, { status: "failed", error: result.reason });
+    if (looksLikeErpOutage(result.reason)) {
+      await erpMarkDown(env);
+      await recordSyncEvent(env, {
+        sku,
+        stage: "erp",
+        level: "error",
+        message: `ERP indisponível (${result.reason}); disjuntor aberto por ${parseIntEnv(env.ERP_DOWN_TTL_SEC, 300)}s`,
+      });
+    }
+    // Sem o ERP o produto ainda tem título, descrição e galeria da origem para
+    // publicar. Travá-lo aqui é o que deixou ~2.000 produtos parados.
+    if (optional) {
+      await seguir();
+      return;
+    }
     throw new Error(`erp fetch failed: ${result.reason}`);
   }
+  await erpMarkUp(env);
   await updateErpResult(env, sku, { status: "ok", json: result.data });
-  if (isFlagOn(env.AUTO_ENQUEUE_MERGE)) {
-    await enqueueStage(env, { stage: "merge", sku });
-  }
+  await seguir();
 }
 
 export async function runMergeStage(env: Env, sku: string): Promise<void> {

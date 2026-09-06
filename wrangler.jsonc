@@ -57,7 +57,7 @@
     // file overwrite whatever is configured in the dashboard.
     "WOO_BASE_URL": "https://dentalodontocirurgica.com.br",
     "REBUILD_INTERVAL_HOURS": "24",
-    "DRAIN_BATCH_SIZE": "20",
+    "DRAIN_BATCH_SIZE": "60",
     "REQUEST_TIMEOUT_MS": "15000",
     "LOG_LEVEL": "INFO",
     "MEDIA_PUBLIC_BASE_URL": "https://media.odontoapi.wpatomic.com.br",
@@ -75,6 +75,12 @@
     // essas chaves e o plugin só as grava sob isset(), então a loja mantém os
     // próprios valores. Voltar para "erp" quando o ERP normalizar.
     "WOO_PUSH_PRICING": "store",
+
+    // ERP fora do ar desde 04/09. Sem disjuntor, cada linha da fila pagava o
+    // timeout inteiro e o tick do cron acabava antes de drenar qualquer coisa.
+    // Timeout curto para a sondagem, e 10 min de janela fechada depois dela.
+    "ERP_TIMEOUT_MS": "6000",
+    "ERP_DOWN_TTL_SEC": "600",
     "ERP_FILIAL_CODIGO": "1"
   },
   "triggers": {

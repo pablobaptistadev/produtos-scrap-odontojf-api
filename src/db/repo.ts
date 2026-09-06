@@ -332,17 +332,40 @@ export async function enqueueSyncRow(
   env: Env,
   row: { stage: string; sku?: string | null; slug?: string | null; url?: string | null; payload?: unknown },
 ): Promise<number> {
+  const payload = row.payload ? JSON.stringify(row.payload) : null;
+
+  // uniq_sync_queue_active é um índice PARCIAL em (sku, stage) para as linhas
+  // ativas. Reenfileirar um estágio que já tem linha ativa estourava
+  // "UNIQUE constraint failed" e derrubava o rebuild inteiro. Revive a linha
+  // que já existe em vez de tentar criar outra.
+  const existing = await env.DB.prepare(
+    `SELECT id FROM sync_queue
+      WHERE stage = ? AND COALESCE(sku, '') = COALESCE(?, '')
+        AND status IN ('pending','processing','failed')
+      ORDER BY id ASC LIMIT 1`,
+  )
+    .bind(row.stage, row.sku ?? null)
+    .first<{ id: number }>();
+
+  if (existing?.id) {
+    await env.DB.prepare(
+      `UPDATE sync_queue
+          SET status = 'pending', attempts = 0, last_error = NULL, next_retry_at = NULL,
+              started_at = NULL, finished_at = NULL,
+              slug = COALESCE(?, slug), url = COALESCE(?, url),
+              payload_json = COALESCE(?, payload_json)
+        WHERE id = ?`,
+    )
+      .bind(row.slug ?? null, row.url ?? null, payload, existing.id)
+      .run();
+    return Number(existing.id);
+  }
+
   const result = await env.DB.prepare(
     `INSERT INTO sync_queue (sku, slug, url, stage, status, payload_json)
      VALUES (?, ?, ?, ?, 'pending', ?)`,
   )
-    .bind(
-      row.sku ?? null,
-      row.slug ?? null,
-      row.url ?? null,
-      row.stage,
-      row.payload ? JSON.stringify(row.payload) : null,
-    )
+    .bind(row.sku ?? null, row.slug ?? null, row.url ?? null, row.stage, payload)
     .run();
   return Number(result.meta?.last_row_id ?? 0);
 }
