@@ -29,6 +29,106 @@ final class ProductSearchService {
      * @param int $exclude_id ID de produto a excluir dos resultados
      * @return int[]
      */
+    /**
+     * Busca que devolve ITENS, não só produtos pai (>= 2.2.0).
+     *
+     * O professor cola o código da variação ("3200") esperando ver
+     * "Fórceps Adulto - N° 17". Resolver para o pai e mostrar "Fórceps Adulto"
+     * com a faixa de preço dele é justamente o que fazia entrar o fórceps errado
+     * na lista. Quando o código bate numa variação, o resultado É a variação.
+     *
+     * Aceita vários códigos de uma vez, separados por vírgula, ponto-e-vírgula
+     * ou quebra de linha — o mesmo formato do campo de importação em massa.
+     *
+     * @param string $term
+     * @param int $limit
+     * @param int $exclude_id
+     * @return array[] lista de {product_id, variation_id}
+     */
+    public function search($term, $limit = 50, $exclude_id = 0) {
+        $term = trim((string) $term);
+        $exclude_id = (int) $exclude_id;
+        if ($term === '') return array();
+
+        $partes = preg_split('/[,;\r\n]+/', $term);
+        $partes = array_values(array_filter(array_map('trim', (array) $partes), 'strlen'));
+        if (empty($partes)) return array();
+
+        $itens = array();
+        $vistos = array();
+
+        $push = function ($product_id, $variation_id) use (&$itens, &$vistos, $exclude_id) {
+            $product_id = (int) $product_id;
+            $variation_id = (int) $variation_id;
+            if (!$product_id || $product_id === $exclude_id) return;
+            $chave = $product_id . ':' . $variation_id;
+            if (isset($vistos[$chave])) return;
+            $vistos[$chave] = true;
+            $itens[] = array('product_id' => $product_id, 'variation_id' => $variation_id);
+        };
+
+        foreach ($partes as $parte) {
+            // 1) SKU exato (regra OD- + variação). A variação vem como ela mesma.
+            $match = $this->resolver->resolve($parte);
+            if ($match) {
+                $push($match['product_id'], $match['variation_id']);
+                continue;
+            }
+
+            // 2) ID numérico de post (produto ou variação)
+            if (ctype_digit($parte)) {
+                $post_id = (int) $parte;
+                if ($post_id && get_post_status($post_id) === 'publish') {
+                    $tipo = get_post_type($post_id);
+                    if ($tipo === 'product') {
+                        $push($post_id, 0);
+                        continue;
+                    }
+                    if ($tipo === 'product_variation') {
+                        $pai = (int) wp_get_post_parent_id($post_id);
+                        if ($pai && get_post_type($pai) === 'product' && get_post_status($pai) === 'publish') {
+                            $push($pai, $post_id);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // 3) Nome. Só vale quando é uma busca só — colando uma lista de
+            //    códigos, um LIKE por texto só traria ruído.
+            if (count($partes) === 1) {
+                foreach ($this->titleIds($parte, $limit, $exclude_id) as $id) {
+                    $push($id, 0);
+                }
+            }
+        }
+
+        return array_slice($itens, 0, $limit);
+    }
+
+    /** IDs de produto pai cujo título casa com o termo. @return int[] */
+    private function titleIds($term, $limit, $exclude_id) {
+        $like = '%' . $this->db->esc_like($term) . '%';
+
+        if ($exclude_id) {
+            return array_map('intval', (array) $this->db->get_col($this->db->prepare(
+                "SELECT ID FROM {$this->db->posts}
+                 WHERE post_type = 'product' AND post_status = 'publish'
+                   AND ID != %d AND post_title LIKE %s
+                 ORDER BY post_title ASC LIMIT %d",
+                $exclude_id, $like, $limit
+            )));
+        }
+
+        return array_map('intval', (array) $this->db->get_col($this->db->prepare(
+            "SELECT ID FROM {$this->db->posts}
+             WHERE post_type = 'product' AND post_status = 'publish'
+               AND post_title LIKE %s
+             ORDER BY post_title ASC LIMIT %d",
+            $like, $limit
+        )));
+    }
+
     public function searchIds($term, $limit = 50, $exclude_id = 0) {
         $term = trim((string) $term);
         $exclude_id = (int) $exclude_id;

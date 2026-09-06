@@ -64,42 +64,38 @@ final class ProdutosAjax {
         $produtos_ordem = array();
         $produtos_na_lista = array();
         $variacao_por_produto = array(); // product_id => variation_id fixada
+        $itens_na_lista = array();       // "product:variation" => true
+        $linhas_da_lista = array();      // itens na ordem salva
 
         if ($categoria_id) {
             $produtos_ordem = $this->ordem->getPositions($categoria_id);
             $produtos_na_lista = array_map('intval', array_keys($produtos_ordem));
             foreach ($this->ordem->getOrderedRows($categoria_id) as $row) {
-                if ($row['variation_id'] > 0) {
-                    $variacao_por_produto[$row['product_id']] = $row['variation_id'];
+                $pid = (int) $row['product_id'];
+                $vid = (int) $row['variation_id'];
+                if ($vid > 0) {
+                    $variacao_por_produto[$pid] = $vid;
                 }
+                $itens_na_lista[$pid . ':' . $vid] = true;
+                $linhas_da_lista[] = array('product_id' => $pid, 'variation_id' => $vid);
             }
         }
 
-        // Resolver a lista de IDs a exibir
-        if (empty($search) && $categoria_id && !empty($produtos_na_lista)) {
-            // Sem busca: produtos da lista (ordem salva) no topo e, abaixo,
-            // uma leva de produtos de sugestão do catálogo (ainda não na lista).
-            $query = new \WP_Query(array(
-                'post_type' => 'product',
-                'posts_per_page' => -1,
-                'post_status' => 'publish',
-                'post__in' => $produtos_na_lista,
-                'orderby' => 'post__in',
-                'fields' => 'ids',
-            ));
-            $ids_da_lista = array_map('intval', $query->posts);
+        // Resolver os ITENS a exibir. Um item é {product_id, variation_id}: duas
+        // variações do mesmo pai são duas linhas legítimas da lista.
+        $itens = array();
 
-            usort($ids_da_lista, function($a, $b) use ($produtos_ordem) {
-                $pos_a = isset($produtos_ordem[$a]) ? $produtos_ordem[$a] : 9999;
-                $pos_b = isset($produtos_ordem[$b]) ? $produtos_ordem[$b] : 9999;
-                return $pos_a - $pos_b;
-            });
-
-            $sugestoes = $this->suggestionIds($produtos_na_lista, 30);
-            $ids_para_exibir = array_merge($ids_da_lista, $sugestoes);
+        if (empty($search) && $categoria_id && !empty($linhas_da_lista)) {
+            foreach ($linhas_da_lista as $linha) {
+                if (get_post_status($linha['product_id']) === 'publish') $itens[] = $linha;
+            }
+            foreach ($this->suggestionIds($produtos_na_lista, 30) as $id) {
+                $itens[] = array('product_id' => (int) $id, 'variation_id' => 0);
+            }
         } elseif (!empty($search)) {
-            // Busca por nome, ID ou SKU (aceita SKU de variação e regra OD-)
-            $ids_para_exibir = $this->search->searchIds($search, 50);
+            // Nome, ID, SKU exato (aceita SKU de variação e lista por vírgula).
+            // Quando o código é de uma variação, o resultado É a variação.
+            $itens = $this->search->search($search, 50);
         } else {
             $query = new \WP_Query(array(
                 'post_type' => 'product',
@@ -109,28 +105,40 @@ final class ProdutosAjax {
                 'order' => 'ASC',
                 'fields' => 'ids',
             ));
-            $ids_para_exibir = array_map('intval', $query->posts);
+            foreach ($query->posts as $id) {
+                $itens[] = array('product_id' => (int) $id, 'variation_id' => 0);
+            }
         }
 
+
         // Buscar contagem de similares para todos os produtos de uma vez (alta performance)
-        $similares_counts = $this->similares->countForProducts($ids_para_exibir);
+        $similares_counts = $this->similares->countForProducts(
+            array_values(array_unique(array_column($itens, 'product_id')))
+        );
 
         $produtos = array();
 
-        foreach ($ids_para_exibir as $product_id) {
+        foreach ($itens as $item) {
+            $product_id = (int) $item['product_id'];
             $product = wc_get_product($product_id);
             if (!$product) {
                 continue;
             }
 
-            $product_id = (int) $product_id;
-
             // Quando a lista fixou uma variação, é ELA que o admin mostra —
             // título, SKU, preço, peso e dimensões próprios. Sem isso o
             // professor colava "411" e via "Fórceps Adulto" com a faixa de
             // preço do pai, sem saber qual tinha entrado.
-            $pinned = isset($variacao_por_produto[$product_id]) ? $variacao_por_produto[$product_id] : 0;
+            // A variação vem do próprio resultado (busca por SKU de variação) ou,
+            // quando o item já está na lista, da linha salva.
+            $pinned = (int) $item['variation_id'];
+            if (!$pinned && isset($variacao_por_produto[$product_id])) {
+                $pinned = (int) $variacao_por_produto[$product_id];
+            }
             $info = VariationData::get($product_id, $pinned);
+            $vid_final = $info ? (int) $info['variation_id'] : 0;
+            $ja_na_lista = isset($itens_na_lista[$product_id . ':' . $vid_final])
+                || ($vid_final === 0 && in_array($product_id, $produtos_na_lista, true));
 
             $produtos[] = array(
                 'id' => $product_id,
@@ -146,7 +154,8 @@ final class ProdutosAjax {
                     : (wp_get_attachment_image_url($product->get_image_id(), 'medium') ?: wc_placeholder_img_src('medium')),
                 'link' => get_permalink($product_id),
                 // "in_category" aqui significa "já está na lista" (tabela de ordem)
-                'in_category' => in_array($product_id, $produtos_na_lista),
+                // "in_category" = ESTE item (produto + variação) já está na lista.
+                'in_category' => $ja_na_lista,
                 'similares_count' => isset($similares_counts[$product_id]) ? intval($similares_counts[$product_id]) : 0,
                 'menu_order' => isset($produtos_ordem[$product_id]) ? intval($produtos_ordem[$product_id]) : 9999
             );
@@ -187,6 +196,7 @@ final class ProdutosAjax {
 
         $post_id = absint($_POST['post_id']);
         $product_id = absint($_POST['product_id']);
+        $variation_id = isset($_POST['variation_id']) ? absint($_POST['variation_id']) : 0;
         $categoria_id = absint($_POST['categoria_id']);
 
         if (!$categoria_id) {
@@ -202,14 +212,38 @@ final class ProdutosAjax {
         if (!in_array($categoria_id, $current_cats)) {
             $current_cats[] = $categoria_id;
             wp_set_post_terms($product_id, $current_cats, 'product_cat');
+        }
 
-            // Adicionar na tabela de ordem com a próxima posição disponível
-            $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id));
+        // A busca por SKU de variação devolve a variação; é ELA que entra na
+        // lista. Sem isso, clicar em "+ Adicionar" no resultado "Fórceps Adulto
+        // - N° 17" gravava o pai solto e a lista mostrava outro fórceps.
+        if ($variation_id > 0) {
+            $pai = (int) wp_get_post_parent_id($variation_id);
+            if ($pai !== $product_id) {
+                $variation_id = 0;
+            }
+        }
+
+        if ($this->ordem->exists($categoria_id, $product_id, $variation_id)) {
+            wp_send_json_success(array(
+                'message' => 'Este item já está na lista',
+                'categoria_id' => $categoria_id,
+                'variation_id' => $variation_id,
+            ));
+        }
+
+        // Já havia a linha do pai "solta" (legado) e agora veio a variação:
+        // promove aquela linha em vez de duplicar o produto na tela.
+        if ($variation_id > 0 && $this->ordem->exists($categoria_id, $product_id, 0)) {
+            $this->ordem->setVariation($categoria_id, $product_id, 0, $variation_id);
+        } else {
+            $this->ordem->insert($categoria_id, $product_id, $this->ordem->nextPosition($categoria_id), $variation_id);
         }
 
         wp_send_json_success(array(
             'message' => 'Produto adicionado à lista',
-            'categoria_id' => $categoria_id
+            'categoria_id' => $categoria_id,
+            'variation_id' => $variation_id,
         ));
     }
 

@@ -104,6 +104,7 @@
                                     type="button" 
                                     class="listas-produto-btn-horizontal ${isAdded ? 'added' : ''}" 
                                     data-product-id="${produto.id}"
+                                    data-variation-id="${produto.variation_id || 0}"
                                     ${isAdded ? 'disabled' : ''}
                                 >
                                     ${isAdded ? '✓ Adicionado' : '+ Adicionar'}
@@ -154,7 +155,7 @@
                 $('.listas-produto-btn-horizontal').not('.added').off('click').on('click', (e) => {
                     const btn = $(e.target);
                     const productId = btn.data('product-id');
-                    this.addProduto(productId, btn);
+                    this.addProduto(productId, btn, btn.data('variation-id') || 0);
                 });
             },
             
@@ -620,7 +621,7 @@
                 });
             },
             
-            addProduto(productId, btn) {
+            addProduto(productId, btn, variationId) {
                 btn.prop('disabled', true).text('Adicionando...');
                 
                 $.ajax({
@@ -631,6 +632,7 @@
                         nonce: this.nonce,
                         post_id: this.postId,
                         product_id: productId,
+                        variation_id: variationId || 0,
                         categoria_id: this.categoriaId
                     },
                     success: (response) => {
