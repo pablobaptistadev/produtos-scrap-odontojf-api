@@ -2,13 +2,19 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.61
+ * Version: 1.0.62
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.62 - O interceptor do /update-product recusava com 404 quando nenhum produto
+ *          tinha aquele _sku — e era exatamente o caso do re-chaveamento, porque o
+ *          codigo sintetico do pai muda quando a origem reordena. O handler de
+ *          update e um UPSERT e sabe achar o produto pelo slug; agora o
+ *          interceptor tenta o slug antes de desistir e so devolve 404 quando o
+ *          payload tambem nao da para criar.
  *  1.0.61 - FIX da adocao: soltar o SKU do gemeo com update_post_meta nao bastava.
  *          O Woo valida "SKU invalido ou duplicado" contra a tabela
  *          wc_product_meta_lookup, que so o save() do produto atualiza — o
@@ -250,7 +256,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.61');
+define('OJF_BRIDGE_VERSION', '1.0.62');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

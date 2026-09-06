@@ -316,20 +316,31 @@ function ojf_aq_intercept($result, $server, $request) {
             : null;
 
         if (!$product_id) {
-            return ojf_aq_error('not_found', 'Product not found: ' . $data['sku'], 404);
+            // O _sku do pai variável é sintético (OD-<código da 1ª variação>) e muda
+            // quando a origem reordena os tamanhos. Recusar aqui bloqueava justamente
+            // o re-chaveamento: o handler de update é um UPSERT e sabe achar o produto
+            // pelo slug da origem. Tenta o slug antes de desistir.
+            if (!empty($data['slug']) && function_exists('ojf_find_owned_product_by_slug')) {
+                $product_id = ojf_find_owned_product_by_slug((string) $data['slug']);
+            }
+            if (!$product_id && (empty($data['name']) || empty($data['type']))) {
+                return ojf_aq_error('not_found', 'Product not found: ' . $data['sku'], 404);
+            }
         }
 
-        $product_seller = get_post_meta($product_id, '_seller', true);
-        if ($product_seller !== $seller) {
-            return ojf_aq_error('forbidden', 'No permission to update this product', 403);
+        if ($product_id) {
+            $product_seller = get_post_meta($product_id, '_seller', true);
+            if ($product_seller !== $seller) {
+                return ojf_aq_error('forbidden', 'No permission to update this product', 403);
+            }
         }
 
         // ✅ TUDO VALIDADO → enfileirar
         $queue_id = ojf_aq_enqueue($endpoint, $seller, $api_key, $data, $product_id);
         $pending  = ojf_aq_pending_count();
 
-        $product      = wc_get_product($product_id);
-        $product_type = $product ? $product->get_type() : 'simple';
+        $product      = $product_id ? wc_get_product($product_id) : null;
+        $product_type = $product ? $product->get_type() : (string) ($data['type'] ?? 'simple');
 
         ojf_aq_trigger_worker();
 
@@ -342,8 +353,8 @@ function ojf_aq_intercept($result, $server, $request) {
             'product_type'   => $product_type,
             'seller'         => $seller,
             'sku'            => $data['sku'],
-            'product_url'    => get_permalink($product_id),
-            'edit_url'       => admin_url('post.php?post=' . $product_id . '&action=edit'),
+            'product_url'    => $product_id ? get_permalink($product_id) : null,
+            'edit_url'       => $product_id ? admin_url('post.php?post=' . $product_id . '&action=edit') : null,
             'api_version'    => '5.1-queued',
         ], 200);
     }

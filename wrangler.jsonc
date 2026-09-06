@@ -42,7 +42,7 @@
         "max_retries": 5,
         "dead_letter_queue": "odontojf-sync-dlq",
         "max_batch_timeout": 10,
-        "max_concurrency": 10
+        "max_concurrency": 5
       }
     ]
   },
@@ -57,7 +57,11 @@
     // file overwrite whatever is configured in the dashboard.
     "WOO_BASE_URL": "https://dentalodontocirurgica.com.br",
     "REBUILD_INTERVAL_HOURS": "24",
-    "DRAIN_BATCH_SIZE": "60",
+    // 60 derrubou o banco do WordPress em 06/09 (522 + "erro ao estabelecer
+    // conexão"): antes do disjuntor do ERP quase nada chegava no push, então a
+    // loja nunca tinha sentido a vazão real. De volta ao 20 de sempre, com a
+    // concorrência da fila em 5.
+    "DRAIN_BATCH_SIZE": "20",
     "REQUEST_TIMEOUT_MS": "15000",
     "LOG_LEVEL": "INFO",
     "MEDIA_PUBLIC_BASE_URL": "https://media.odontoapi.wpatomic.com.br",
