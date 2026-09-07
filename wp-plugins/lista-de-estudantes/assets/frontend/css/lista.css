@@ -448,6 +448,10 @@
             color: white;
         }
         
+        .listas-produto-adicionado-nome {
+            font-weight: 700;
+        }
+
         /* Cards de variação: foto, título, SKU e preço de cada opção. */
         .listas-variacoes-titulo {
             font-size: 12px;

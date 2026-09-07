@@ -264,6 +264,12 @@
         }
         
         
+        function escaparHtml(txt) {
+            return String(txt).replace(/[&<>"']/g, function(c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
+
         $(document).on('click', '.listas-btn-adicionar', function() {
             const btn = $(this);
             const productId = btn.data('product-id');
@@ -290,9 +296,19 @@
             // Desabilitar botão e mostrar feedback
             btn.prop('disabled', true).text('Adicionando...');
             
+            // Nome do que está indo para o carrinho: o da VARIAÇÃO escolhida
+            // quando há uma, senão o título do card. "Produto adicionado" não
+            // dizia qual, e numa lista de doze fórceps isso é o que importa.
+            const cardSelecionado = wrapper.find('.listas-variacao-card.active').first();
+            let nomeItem = cardSelecionado.length ? (cardSelecionado.attr('data-nome') || '') : '';
+            if (!nomeItem) nomeItem = String(wrapper.find('.listas-produto-title').first().text() || '').trim();
+
             adicionarAoCarrinho(productId, variationId, qty).done(function(response) {
                     if (response.success) {
-                    const successMsg = '<div class="listas-produto-adicionado">✓ Produto adicionado ao carrinho</div>';
+                    const nomeHtml = nomeItem
+                        ? '<strong class="listas-produto-adicionado-nome">' + escaparHtml(nomeItem) + '</strong> adicionado ao carrinho'
+                        : 'Produto adicionado ao carrinho';
+                    const successMsg = '<div class="listas-produto-adicionado">✓ ' + nomeHtml + '</div>';
                     const cartBtn = '<a href="' + ListasFrontendConfig.cartUrl + '" class="listas-ver-similares listas-btn-ver-carrinho" title="Ver carrinho">' +
                         '<svg viewBox="0 0 16 16"><path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/><path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/></svg>' +
                         'Ver carrinho</a>';
@@ -387,9 +403,14 @@
                             
                             btnSimilar.prop('disabled', true).text('Adicionando...');
                             
+                            const nomeSimilar = String(wrapperSimilar.find('.listas-similar-name').first().text() || '').trim();
+
                             adicionarAoCarrinho(productIdSimilar, 0, qtySimilar).done(function(response) {
                                 if (response.success) {
-                                    btnSimilar.parent().html('<div class="listas-produto-adicionado">✓ Produto adicionado ao carrinho</div>');
+                                    const txtSimilar = nomeSimilar
+                                        ? '<strong class="listas-produto-adicionado-nome">' + escaparHtml(nomeSimilar) + '</strong> adicionado ao carrinho'
+                                        : 'Produto adicionado ao carrinho';
+                                    btnSimilar.parent().html('<div class="listas-produto-adicionado">✓ ' + txtSimilar + '</div>');
                                     if (typeof wc_add_to_cart_params !== 'undefined') {
                                         $(document.body).trigger('wc_fragment_refresh');
                                     }
