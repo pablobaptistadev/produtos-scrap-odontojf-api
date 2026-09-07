@@ -50,19 +50,28 @@ if (!$is_variable && $preco_atual <= 0) {
 
 $default_variation_id = $has_pinned ? $variation_id : 0;
 
-// Atributos só são oferecidos quando o aluno precisa escolher.
-$variation_attributes = array();
+// "Ver opções" mostra CARDS de variação — foto, título, SKU e preço de cada
+// uma —, não uma fileira de etiquetas de atributo. O aluno escolhia "N° 17" sem
+// ver o que era, e o pedido saía errado.
+$variacoes_cards = array();
 if ($needs_choice) {
-    $variations = $product->get_available_variations();
-    if (!empty($variations)) {
-        foreach ($product->get_variation_attributes() as $attr_name => $attr_options) {
-            $variation_attributes[$attr_name] = array(
-                'name' => wc_attribute_label($attr_name),
-                'options' => $attr_options,
-                'selected' => '',
-                'attr_name' => $attr_name
-            );
-        }
+    foreach ((array) $product->get_children() as $vid) {
+        $vid = (int) $vid;
+        if (get_post_status($vid) !== 'publish') continue;
+
+        $vinfo = VariationData::get($product_id, $vid);
+        if (!$vinfo) continue;
+
+        $vobj = wc_get_product($vid);
+        $variacoes_cards[] = array(
+            'id'         => $vid,
+            'titulo'     => $vinfo['title'],
+            'sku'        => $vinfo['sku'],
+            'preco'      => (float) $vinfo['price'],
+            'preco_html' => $vinfo['price_html'],
+            'imagem'     => $vinfo['image'],
+            'em_estoque' => $vobj ? $vobj->is_in_stock() : true,
+        );
     }
 }
 
@@ -108,7 +117,7 @@ $descricao = trim(wp_strip_all_tags((string) $info['description']));
                                 Ver similares
                             </button>
                             <?php endif; ?>
-                            <?php if ($needs_choice && !empty($variation_attributes)): ?>
+                            <?php if ($needs_choice && !empty($variacoes_cards)): ?>
                                 <button type="button" class="listas-btn-selecionar-variacao" data-product-id="<?php echo $product_id; ?>">
                                     Ver opções
                                 </button>
@@ -122,42 +131,32 @@ $descricao = trim(wp_strip_all_tags((string) $info['description']));
 
                     <div class="listas-produto-feedback" id="listas-feedback-<?php echo esc_attr($uid); ?>"></div>
 
-                    <?php if ($needs_choice && !empty($variation_attributes)): ?>
+                    <?php if ($needs_choice && !empty($variacoes_cards)): ?>
                         <div class="listas-variacoes-wrapper" id="variacoes-<?php echo $product_id; ?>">
-                            <?php foreach ($variation_attributes as $attr_name => $attr_data): ?>
-                                <div class="listas-variacao-attr">
-                                    <label><?php echo esc_html($attr_data['name']); ?>:</label>
-                                    <div class="listas-variacao-tags" data-attribute="<?php echo esc_attr($attr_data['attr_name']); ?>" data-product-id="<?php echo $product_id; ?>">
-                                        <?php
-                                        $attr_slug_name = $attr_data['attr_name'];
-                                        $is_taxonomy = taxonomy_exists($attr_slug_name);
-
-                                        foreach ($attr_data['options'] as $option_name):
-                                            $option_slug = sanitize_title($option_name);
-
-                                            if ($is_taxonomy) {
-                                                $term = get_term_by('name', $option_name, $attr_slug_name);
-                                                if ($term && !is_wp_error($term)) {
-                                                    $option_slug = $term->slug;
-                                                }
-                                            }
-
-                                            $is_active = ($attr_data['selected'] === $option_slug ||
-                                                         $attr_data['selected'] === $option_name ||
-                                                         sanitize_title($attr_data['selected']) === $option_slug);
-                                        ?>
-                                            <span class="listas-variacao-tag <?php echo $is_active ? 'active' : ''; ?>"
-                                                  data-value="<?php echo esc_attr($option_slug); ?>"
-                                                  data-attribute="<?php echo esc_attr($attr_data['attr_name']); ?>"
-                                                  data-name="<?php echo esc_attr($option_name); ?>">
-                                                <?php echo esc_html($option_name); ?>
-                                            </span>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
+                            <div class="listas-variacoes-titulo">Escolha a opção:</div>
+                            <div class="listas-variacoes-grid">
+                                <?php foreach ($variacoes_cards as $vc): ?>
+                                    <button type="button"
+                                            class="listas-variacao-card<?php echo $vc['em_estoque'] ? '' : ' sem-estoque'; ?>"
+                                            data-product-id="<?php echo $product_id; ?>"
+                                            data-variation-id="<?php echo (int) $vc['id']; ?>"
+                                            data-price="<?php echo esc_attr($vc['preco']); ?>"
+                                            data-price-html="<?php echo esc_attr($vc['preco_html']); ?>"
+                                            data-nome="<?php echo esc_attr($vc['titulo']); ?>">
+                                        <span class="listas-variacao-card-img">
+                                            <img src="<?php echo esc_url($vc['imagem']); ?>" alt="<?php echo esc_attr($vc['titulo']); ?>" loading="lazy">
+                                        </span>
+                                        <span class="listas-variacao-card-nome"><?php echo esc_html($vc['titulo']); ?></span>
+                                        <span class="listas-variacao-card-sku">SKU: <?php echo esc_html($vc['sku']); ?></span>
+                                        <span class="listas-variacao-card-preco"><?php echo wp_kses_post($vc['preco_html']); ?></span>
+                                        <?php if (!$vc['em_estoque']): ?>
+                                            <span class="listas-variacao-card-esgotado">sem estoque</span>
+                                        <?php endif; ?>
+                                    </button>
+                                <?php endforeach; ?>
+                            </div>
                             <div class="listas-variacao-selected is-empty" id="variacao-info-<?php echo $product_id; ?>">
-                                Selecione as opções para ver o preço
+                                Escolha uma opção acima
                             </div>
                             <button type="button" class="listas-btn-adicionar" data-product-id="<?php echo $product_id; ?>" data-variation-id="0" id="btn-adicionar-var-<?php echo $product_id; ?>" disabled>
                                 Adicionar

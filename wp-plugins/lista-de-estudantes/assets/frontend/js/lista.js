@@ -209,114 +209,46 @@
             wrapper.toggleClass('active');
         });
         
-        // Atualizar variação quando clicar em tag
-        $(document).on('click', '.listas-variacao-tag', function() {
-            const tag = $(this);
-            const attrName = tag.data('attribute');
-            const productId = tag.closest('.listas-variacao-tags').data('product-id');
-            const wrapper = tag.closest('.listas-produto-wrapper');
-            const infoBox = $('#variacao-info-' + productId);
-            
-            // Remover active de todas as tags do mesmo atributo
-            tag.siblings('.listas-variacao-tag').removeClass('active');
-            // Adicionar active na tag clicada
-            tag.addClass('active');
-            
-            // Coletar todos os atributos selecionados usando o nome exato do atributo
-            const attributes = {};
-            let selectedCount = 0;
-            
-            wrapper.find('.listas-variacao-tags').each(function() {
-                const activeTag = $(this).find('.listas-variacao-tag.active');
-                if (activeTag.length) {
-                    const attr = $(this).data('attribute');
-                    // SEMPRE usar data-value que contém o slug
-                    let value = activeTag.data('value');
-                    
-                    // Se o valor ainda for o nome (primeira letra maiúscula), converter para slug
-                    if (value && value.charAt(0) === value.charAt(0).toUpperCase() && value !== value.toLowerCase()) {
-                        value = value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                    }
-                    
-                    // Enviar com prefixo attribute_ (formato WooCommerce) - formato principal
-                    attributes['attribute_' + attr] = value;
-                    
-                    // Também enviar sem prefixo para garantir compatibilidade
-                    attributes[attr] = value;
-                    
-                    selectedCount++;
-                }
-            });
-            
-            // Verificar se todos os atributos foram selecionados (usar contador, não Object.keys)
-            const totalAttrs = wrapper.find('.listas-variacao-tags').length;
-            const selectedAttrs = selectedCount;
-            
-            if (totalAttrs === selectedAttrs) {
-                // Buscar variação correspondente
-                $.ajax({
-                    url: ListasFrontendConfig.ajaxUrl,
-                    type: 'POST',
-                    data: {
-                        action: 'listas_find_variation',
-                        product_id: productId,
-                        attributes: attributes
-                    },
-                    success: function(response) {
-                        if (response.success && response.data && response.data.variation_id) {
-                            const variation = response.data;
-                            wrapper.attr('data-variation-id', variation.variation_id);
-                            wrapper.find('.listas-produto-check').attr('data-variation-id', variation.variation_id).attr('data-price', variation.price);
-                            
-                            // Mostrar preço com tag de desconto
-                            const priceContainer = wrapper.find('.listas-produto-price');
-                            let priceHtml = variation.price_html;
-                            
-                            // Adicionar tag de desconto se houver
-                            if (variation.discount_percent) {
-                                priceHtml += ' <span class="listas-desconto-tag">' + variation.discount_percent + '% OFF</span>';
-                            }
-                            
-                            priceContainer.html(priceHtml);
-                            
-                            // Atualizar botão de adicionar dentro do painel de variações
-                            const btnAdicionar = $('#btn-adicionar-var-' + productId);
-                            if (btnAdicionar.length) {
-                                btnAdicionar.attr('data-variation-id', variation.variation_id).prop('disabled', false).removeClass('disabled');
-                            }
-                            
-                            // Atualizar botão principal também se existir
-                            wrapper.find('.listas-btn-adicionar').attr('data-variation-id', variation.variation_id).prop('disabled', false);
-                            
-                            const variationInfoHtml = '<div class="listas-variacao-price-label">Preço da variação</div>' +
-                                '<div class="listas-variacao-price-value">' + priceHtml + '</div>' +
-                                (variation.variation_name ? '<div class="listas-variacao-selected-name">' + variation.variation_name + '</div>' : '');
-                            
-                            infoBox.removeClass('is-empty').html(variationInfoHtml);
-                        } else {
-                            const errorMsg = response.data && response.data.message ? response.data.message : 'Variação não encontrada. Verifique as opções selecionadas.';
-                            console.error('Erro ao encontrar variação:', response);
-                            
-                            // Desabilitar botão em caso de erro
-                            $('#btn-adicionar-var-' + productId).prop('disabled', true);
-                            
-                            infoBox.addClass('is-empty').text('Selecione as opções para ver o preço');
-                            alert(errorMsg);
-                        }
-                    },
-                    error: function(xhr, status, error) {
-                        console.error('Erro AJAX:', status, error, xhr.responseText);
-                        infoBox.addClass('is-empty').text('Selecione as opções para ver o preço');
-                        alert('Erro ao buscar variação. Verifique o console para mais detalhes.');
-                    }
-                });
-            } else {
-                // Desabilitar botão se nem todos os atributos foram selecionados
-                $('#btn-adicionar-var-' + productId).prop('disabled', true);
-                infoBox.addClass('is-empty').text('Selecione as opções para ver o preço');
-            }
+        // Escolher a variação clicando no CARD. Todo o dado já veio no HTML
+        // (título, SKU, preço e imagem da variação), então não há ida ao
+        // servidor: a escolha é instantânea e não depende de casar atributos.
+        $(document).on('click', '.listas-variacao-card', function() {
+            const card = $(this);
+            const productId = card.data('product-id');
+            const variationId = parseInt(card.data('variation-id'), 10) || 0;
+            const preco = parseFloat(card.data('price')) || 0;
+            const precoHtml = card.attr('data-price-html') || '';
+            const nome = card.attr('data-nome') || '';
+
+            const wrapper = card.closest('.listas-variacoes-wrapper');
+            const produto = wrapper.closest('.listas-produto-wrapper');
+
+            wrapper.find('.listas-variacao-card').removeClass('active');
+            card.addClass('active');
+
+            produto.attr('data-variation-id', variationId);
+            produto.find('.listas-produto-check')
+                   .attr('data-variation-id', variationId)
+                   .attr('data-price', preco);
+
+            if (precoHtml) produto.find('.listas-produto-price').first().html(precoHtml);
+
+            $('#btn-adicionar-var-' + productId)
+                .attr('data-variation-id', variationId)
+                .prop('disabled', false)
+                .removeClass('disabled');
+
+            produto.find('.listas-btn-adicionar').attr('data-variation-id', variationId);
+
+            $('#variacao-info-' + productId)
+                .removeClass('is-empty')
+                .html('<div class="listas-variacao-price-label">Selecionado</div>' +
+                      '<div class="listas-variacao-price-value">' + precoHtml + '</div>' +
+                      (nome ? '<div class="listas-variacao-selected-name">' + nome + '</div>' : ''));
+
+            atualizarTotal();
         });
-        
+
         // Adicionar ao carrinho
         function adicionarAoCarrinho(productId, variationId, quantity) {
             return $.ajax({
