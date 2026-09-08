@@ -6,7 +6,7 @@ import { socketFetch } from "./socket-fetch";
 /**
  * ERP integration — Space Informática "ecommerceapi" platform.
  *
- *   Docs   : http://45.227.82.180:8082/ecommerceapi/v1/documentacao/
+ *   Docs   : http://cc210ff240a8.sn.mynetname.net:8082/ecommerceapi/v1/documentacao/
  *   Login  : POST /autenticacao/entrar
  *            body { "login":"...", "senha":"...", "filialCodigo": <int> }
  *            → 200 OK { token, ... }

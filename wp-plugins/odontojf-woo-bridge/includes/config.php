@@ -39,7 +39,7 @@ if (!defined('OJF_CDN_BASE_URL'))  define('OJF_CDN_BASE_URL',  get_option('ojf_c
  * ERP (Space Informática) — usado para consultar preço/estoque em tempo real
  * no carrinho. Token renovado automaticamente via login (POST /autenticacao/entrar).
  */
-if (!defined('OJF_ERP_BASE_URL')) define('OJF_ERP_BASE_URL', get_option('ojf_erp_base_url', 'http://45.227.82.180:8082/ecommerceapi/v1'));
+if (!defined('OJF_ERP_BASE_URL')) define('OJF_ERP_BASE_URL', get_option('ojf_erp_base_url', 'http://cc210ff240a8.sn.mynetname.net:8082/ecommerceapi/v1'));
 if (!defined('OJF_ERP_LOGIN'))    define('OJF_ERP_LOGIN',    get_option('ojf_erp_login', 'apiecommerce2'));
 if (!defined('OJF_ERP_SENHA'))    define('OJF_ERP_SENHA',    get_option('ojf_erp_senha', 'api123'));
 if (!defined('OJF_ERP_FILIAL'))   define('OJF_ERP_FILIAL',   (int) get_option('ojf_erp_filial', 1));

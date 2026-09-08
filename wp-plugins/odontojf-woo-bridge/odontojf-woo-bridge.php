@@ -2,13 +2,18 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.65
+ * Version: 1.0.66
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.66 - ERP trocou de endereco: 45.227.82.180 parou de responder (ETIMEDOUT)
+ *          e o fornecedor passou a atender por cc210ff240a8.sn.mynetname.net.
+ *          Porta 8082, caminho e protocolo iguais. Alem do novo padrao, migra a
+ *          option ojf_erp_base_url de quem ja tinha o IP salvo nos ajustes — sem
+ *          isso o padrao novo nao valeria nada.
  *  1.0.65 - A adocao ainda morria em "SKU invalido ou duplicado". O 1.0.61 solta o
  *          codigo procurando o dono pelo postmeta _sku — so que a PRIMEIRA
  *          tentativa (1.0.60) ja tinha zerado esse postmeta sem conseguir mexer no
@@ -277,7 +282,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.65');
+define('OJF_BRIDGE_VERSION', '1.0.66');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
@@ -303,6 +308,23 @@ if (is_admin()) {
     require_once OJF_BRIDGE_DIR . 'includes/media-r2-admin.php'; // biblioteca: coluna/filtro/grid + upload /assets/ (cinza)
     require_once OJF_BRIDGE_DIR . 'includes/product-fields-box.php'; // metabox: campos customizados (_odontojf_*/_ojf_*) no editor
 }
+
+/**
+ * O ERP trocou de endereço (08/09): o IP 45.227.82.180 parou de responder e o
+ * fornecedor passou a atender pelo nome. Mudar só o padrão do plugin não
+ * bastaria — quem já salvou a URL nos ajustes tem o IP gravado na option, e é
+ * ela que vale. Roda a cada carga, custa uma leitura de option autoloaded, e é
+ * inofensiva depois da primeira vez.
+ */
+add_action('plugins_loaded', function () {
+    $antigo = '45.227.82.180';
+    $novo   = 'cc210ff240a8.sn.mynetname.net';
+    $url    = (string) get_option('ojf_erp_base_url', '');
+    if ($url !== '' && strpos($url, $antigo) !== false) {
+        update_option('ojf_erp_base_url', str_replace($antigo, $novo, $url), true);
+        error_log('[ojf] ERP_BASE_URL migrada do IP antigo para ' . $novo);
+    }
+}, 5);
 
 /**
  * Activation: cria as tabelas (funções definidas nos arquivos portados) e

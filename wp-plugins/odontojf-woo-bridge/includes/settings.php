@@ -25,7 +25,7 @@ function ojf_settings_fields() {
         'ojf_r2_secret_key'  => ['R2 Secret Access Key', 'password', '', 'Secret do token S3 do R2 (fica salvo no banco, oculto).'],
         'ojf_r2_bucket'      => ['R2 Bucket', 'text', 'odonto-loja', 'Nome do bucket das imagens.'],
         'ojf_cdn_base_url'   => ['CDN Base URL', 'text', 'https://arquivos.dentalodontocirurgica.com.br', 'Domínio público das imagens (sem barra no final).'],
-        'ojf_erp_base_url'   => ['ERP — Base URL', 'text', 'http://45.227.82.180:8082/ecommerceapi/v1', 'Endpoint da API do ERP (Space).'],
+        'ojf_erp_base_url'   => ['ERP — Base URL', 'text', 'http://cc210ff240a8.sn.mynetname.net:8082/ecommerceapi/v1', 'Endpoint da API do ERP (Space).'],
         'ojf_erp_login'      => ['ERP — Login', 'text', 'apiecommerce2', 'Usuário do login do ERP (o token renova sozinho).'],
         'ojf_erp_senha'      => ['ERP — Senha', 'password', 'api123', 'Senha do login do ERP.'],
         'ojf_erp_filial'     => ['ERP — Filial', 'text', '1', 'filialCodigo enviado no login.'],

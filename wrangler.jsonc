@@ -50,7 +50,10 @@
     "SCRAPE_BASE_URL": "https://dentalodontocirurgicajf.com.br",
     "SCRAPE_SITEMAP_PATH": "/api/sitemap/products",
     "SCRAPE_USER_AGENT": "Mozilla/5.0 (compatible; OdontoJfSync/1.0; +https://odontoapi.wpatomic.com.br)",
-    "ERP_BASE_URL": "http://45.227.82.180:8082/ecommerceapi/v1",
+    // 08/09: o ERP trocou de endereço. O IP 45.227.82.180 parou de responder
+    // (ETIMEDOUT) e o fornecedor passou a atender pelo nome. Porta, caminho e
+    // protocolo seguem iguais.
+    "ERP_BASE_URL": "http://cc210ff240a8.sn.mynetname.net:8082/ecommerceapi/v1",
     // Effective target in production (confirmed via GET /version). The old
     // value here pointed at odonto.wpatomic.com.br — deploying with that set
     // would have repointed the push at the wrong store, since vars in this
