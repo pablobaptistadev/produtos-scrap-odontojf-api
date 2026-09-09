@@ -90,6 +90,46 @@ const MIGRATIONS: Array<{ id: string; sql: string }> = [
     id: "006_external_sku",
     sql: `ALTER TABLE products ADD COLUMN external_sku TEXT`,
   },
+  {
+    // Queue hygiene:
+    //   1) Collapse the backlog to one active row per (stage, sku).
+    //   2) Keep it that way with a partial unique index. SQLite treats
+    //      NULL skus as distinct in a unique index, so it does NOT block
+    //      concurrent rebuild rows; the enqueueRebuild idempotency guard covers
+    //      that case instead.
+    //   3) Cleanup index for the retention purge (status, finished_at).
+    id: "007_sync_queue_dedup_retention",
+    sql: `
+      DELETE FROM sync_queue
+       WHERE status IN ('pending','processing','failed')
+         AND id NOT IN (
+           SELECT MAX(id) FROM sync_queue
+            WHERE status IN ('pending','processing','failed')
+            GROUP BY stage, COALESCE(sku, '')
+         );
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_sync_queue_active
+        ON sync_queue(sku, stage)
+        WHERE status IN ('pending','processing','failed');
+      CREATE INDEX IF NOT EXISTS idx_sync_queue_cleanup
+        ON sync_queue(status, finished_at);
+    `,
+  },
+  {
+    // Woo Bridge: per-product tracking of the WordPress-side api_queue.
+    //   woo_queue_id     — the id returned by the plugin's {queued, queue_id}
+    //   woo_duration_ms  — the WP-side handler execution_time_ms (ground truth)
+    //   woo_queue_status — pending|processing|completed|passed|failed (WP terminal)
+    //   woo_pushed_at    — when the Worker POSTed to the plugin
+    // (woo_product_id / woo_status / woo_last_response / woo_error /
+    //  woo_updated_at already exist from 001_init.)
+    id: "008_woo_bridge",
+    sql: `
+      ALTER TABLE products ADD COLUMN woo_queue_id     INTEGER;
+      ALTER TABLE products ADD COLUMN woo_duration_ms  INTEGER;
+      ALTER TABLE products ADD COLUMN woo_queue_status TEXT;
+      ALTER TABLE products ADD COLUMN woo_pushed_at    TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(db: D1Database): Promise<{ applied: string[] }> {

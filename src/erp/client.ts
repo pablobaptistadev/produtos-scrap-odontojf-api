@@ -6,7 +6,7 @@ import { socketFetch } from "./socket-fetch";
 /**
  * ERP integration — Space Informática "ecommerceapi" platform.
  *
- *   Docs   : http://45.227.82.180:8082/ecommerceapi/v1/documentacao/
+ *   Docs   : http://cc210ff240a8.sn.mynetname.net:8082/ecommerceapi/v1/documentacao/
  *   Login  : POST /autenticacao/entrar
  *            body { "login":"...", "senha":"...", "filialCodigo": <int> }
  *            → 200 OK { token, ... }
@@ -45,7 +45,7 @@ export async function fetchProductFromErp(env: Env, sku: string): Promise<ErpFet
   if (!base) {
     return { status: "skipped", reason: "ERP_BASE_URL not configured" };
   }
-  const timeoutMs = parseIntEnv(env.REQUEST_TIMEOUT_MS, 15000);
+  const timeoutMs = parseIntEnv(env.ERP_TIMEOUT_MS, parseIntEnv(env.REQUEST_TIMEOUT_MS, 15000));
 
   // Up to 2 tries: first with cached/static token, second with a freshly-
   // issued one. The retry-on-401 path runs whenever ERP_LOGIN/ERP_SENHA are

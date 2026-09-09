@@ -22,6 +22,11 @@ export interface ProductRow {
   woo_last_response: string | null;
   woo_updated_at: string | null;
   woo_error: string | null;
+  /** Woo Bridge (migration 008): the WordPress-side api_queue job. */
+  woo_queue_id: number | null;
+  woo_queue_status: string | null;
+  woo_duration_ms: number | null;
+  woo_pushed_at: string | null;
   created_at: string;
 }
 
@@ -60,7 +65,7 @@ export async function upsertProductFromSitemap(
 export async function updateScrapeResult(
   env: Env,
   sku: string,
-  result: { status: "ok" | "failed"; json?: unknown; error?: string; externalSku?: string | null },
+  result: { status: "ok" | "failed" | "skipped"; json?: unknown; error?: string; externalSku?: string | null },
 ): Promise<void> {
   const ts = nowIso();
   await env.DB.prepare(
@@ -144,6 +149,133 @@ export async function updateWooResult(
     .run();
 }
 
+/**
+ * Woo Bridge variant of `updateWooResult`.
+ *
+ * The bridge plugin answers with a queue receipt rather than a product, so the
+ * push stage lands here twice: once when the job is accepted (status
+ * `processing` + `queue_id`), and again when polling resolves it to a terminal
+ * state. Every column is COALESCE'd so a later partial update never erases what
+ * the first one wrote — `woo_error` is the deliberate exception, since a retry
+ * that succeeds must clear the previous error.
+ */
+export async function updateWooQueueResult(
+  env: Env,
+  sku: string,
+  result: {
+    status?: "ok" | "failed" | "skipped" | "processing";
+    productId?: number | null;
+    queueId?: number | null;
+    queueStatus?: string | null;
+    durationMs?: number | null;
+    response?: unknown;
+    error?: string | null;
+    pushedAt?: string | null;
+  },
+): Promise<void> {
+  const ts = nowIso();
+  await env.DB.prepare(
+    `UPDATE products
+       SET woo_status        = COALESCE(?, woo_status),
+           woo_product_id    = COALESCE(?, woo_product_id),
+           woo_queue_id      = COALESCE(?, woo_queue_id),
+           woo_queue_status  = COALESCE(?, woo_queue_status),
+           woo_duration_ms   = COALESCE(?, woo_duration_ms),
+           woo_last_response = COALESCE(?, woo_last_response),
+           woo_error         = ?,
+           woo_pushed_at     = COALESCE(?, woo_pushed_at),
+           woo_updated_at    = ?
+     WHERE sku = ?`,
+  )
+    .bind(
+      result.status ?? null,
+      result.productId ?? null,
+      result.queueId ?? null,
+      result.queueStatus ?? null,
+      result.durationMs ?? null,
+      result.response !== undefined ? JSON.stringify(result.response) : null,
+      result.error ?? null,
+      result.pushedAt ?? null,
+      ts,
+      sku,
+    )
+    .run();
+}
+
+/** Products handed to the bridge whose WP-side job has not reached a terminal state. */
+export async function listWooQueuePending(
+  env: Env,
+  limit: number,
+): Promise<Array<{ sku: string; woo_queue_id: number }>> {
+  const res = await env.DB.prepare(
+    `SELECT sku, woo_queue_id FROM products
+       WHERE woo_queue_id IS NOT NULL
+         AND (woo_queue_status IS NULL OR woo_queue_status NOT IN ('completed','passed','failed'))
+       ORDER BY woo_pushed_at ASC
+       LIMIT ?`,
+  )
+    .bind(limit)
+    .all<{ sku: string; woo_queue_id: number }>();
+  return res.results ?? [];
+}
+
+/**
+ * Retention: drop finished queue rows. Deletes in bounded chunks so a single
+ * cron tick can never blow the D1 statement budget — it stops early once a
+ * chunk comes back short, and gives up after `maxChunks` either way.
+ */
+export async function purgeTerminalSyncRows(
+  env: Env,
+  opts: { olderThanHours?: number; chunkSize?: number; maxChunks?: number } = {},
+): Promise<number> {
+  const olderThanHours = opts.olderThanHours ?? 24;
+  const chunkSize = Math.min(Math.max(opts.chunkSize ?? 1000, 1), 1000);
+  const maxChunks = Math.max(opts.maxChunks ?? 5, 1);
+  const cutoff = new Date(Date.now() - olderThanHours * 3600000).toISOString();
+  let removed = 0;
+  for (let i = 0; i < maxChunks; i++) {
+    const res = await env.DB.prepare(
+      `DELETE FROM sync_queue
+        WHERE id IN (
+          SELECT id FROM sync_queue
+           WHERE status IN ('done','dead')
+             AND (finished_at IS NULL OR finished_at < ?)
+           LIMIT ?
+        )`,
+    )
+      .bind(cutoff, chunkSize)
+      .run();
+    const n = res.meta?.changes ?? 0;
+    removed += n;
+    if (n < chunkSize) break;
+  }
+  return removed;
+}
+
+/** Retention: same bounded-chunk strategy for the event log. */
+export async function purgeOldSyncEvents(
+  env: Env,
+  opts: { olderThanDays?: number; chunkSize?: number; maxChunks?: number } = {},
+): Promise<number> {
+  const olderThanDays = opts.olderThanDays ?? 14;
+  const chunkSize = Math.min(Math.max(opts.chunkSize ?? 1000, 1), 1000);
+  const maxChunks = Math.max(opts.maxChunks ?? 5, 1);
+  const cutoff = new Date(Date.now() - olderThanDays * 86400000).toISOString();
+  let removed = 0;
+  for (let i = 0; i < maxChunks; i++) {
+    const res = await env.DB.prepare(
+      `DELETE FROM sync_events
+        WHERE id IN (SELECT id FROM sync_events WHERE created_at < ? LIMIT ?)`,
+    )
+      .bind(cutoff, chunkSize)
+      .run();
+    const n = res.meta?.changes ?? 0;
+    removed += n;
+    if (n < chunkSize) break;
+  }
+  return removed;
+}
+
 export async function getProductBySku(env: Env, sku: string): Promise<ProductRow | null> {
   return await env.DB.prepare("SELECT * FROM products WHERE sku = ?").bind(sku).first<ProductRow>();
 }
@@ -200,17 +332,40 @@ export async function enqueueSyncRow(
   env: Env,
   row: { stage: string; sku?: string | null; slug?: string | null; url?: string | null; payload?: unknown },
 ): Promise<number> {
+  const payload = row.payload ? JSON.stringify(row.payload) : null;
+
+  // uniq_sync_queue_active é um índice PARCIAL em (sku, stage) para as linhas
+  // ativas. Reenfileirar um estágio que já tem linha ativa estourava
+  // "UNIQUE constraint failed" e derrubava o rebuild inteiro. Revive a linha
+  // que já existe em vez de tentar criar outra.
+  const existing = await env.DB.prepare(
+    `SELECT id FROM sync_queue
+      WHERE stage = ? AND COALESCE(sku, '') = COALESCE(?, '')
+        AND status IN ('pending','processing','failed')
+      ORDER BY id ASC LIMIT 1`,
+  )
+    .bind(row.stage, row.sku ?? null)
+    .first<{ id: number }>();
+
+  if (existing?.id) {
+    await env.DB.prepare(
+      `UPDATE sync_queue
+          SET status = 'pending', attempts = 0, last_error = NULL, next_retry_at = NULL,
+              started_at = NULL, finished_at = NULL,
+              slug = COALESCE(?, slug), url = COALESCE(?, url),
+              payload_json = COALESCE(?, payload_json)
+        WHERE id = ?`,
+    )
+      .bind(row.slug ?? null, row.url ?? null, payload, existing.id)
+      .run();
+    return Number(existing.id);
+  }
+
   const result = await env.DB.prepare(
     `INSERT INTO sync_queue (sku, slug, url, stage, status, payload_json)
      VALUES (?, ?, ?, ?, 'pending', ?)`,
   )
-    .bind(
-      row.sku ?? null,
-      row.slug ?? null,
-      row.url ?? null,
-      row.stage,
-      row.payload ? JSON.stringify(row.payload) : null,
-    )
+    .bind(row.sku ?? null, row.slug ?? null, row.url ?? null, row.stage, payload)
     .run();
   return Number(result.meta?.last_row_id ?? 0);
 }
