@@ -348,6 +348,18 @@ export async function runPushStage(env: Env, sku: string): Promise<void> {
     return;
   }
 
+  // O merge troca o título pelo nome do ERP: um scrape de página 404 vira um
+  // produto de nome bonito e conteúdo vazio, e passa pela trava de nome abaixo.
+  // Em 01/10 isso empurrou 7 produtos que a origem tinha tirado do ar. O scraper
+  // novo já não grava página de erro; isto cobre o que ficou no D1 de antes.
+  const scrape = safeJsonParse<{ status_code?: number; title?: string | null }>(product.scrape_json);
+  if (scrape && ((scrape.status_code ?? 200) >= 400 || looksLikeErrorPageTitle(scrape.title))) {
+    const reason = `scrape é página de erro (HTTP ${scrape.status_code ?? "?"}, título ${JSON.stringify(scrape.title ?? null)}) — push recusado`;
+    await updateWooResult(env, sku, { status: "failed", error: reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "error", message: reason });
+    return;
+  }
+
   const merged = safeJsonParse<Record<string, unknown>>(product.merged_json);
   if (!merged) throw new Error(`merged payload invalid JSON for sku=${sku}`);
   const wooSku = product.external_sku ?? sku;
