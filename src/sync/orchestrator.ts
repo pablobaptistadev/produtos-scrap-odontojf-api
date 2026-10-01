@@ -7,6 +7,8 @@ import {
   setAppState,
   getAppState,
   listPendingSyncRows,
+  markSyncRowsDispatched,
+  setWooPushedHash,
 } from "../db/repo";
 import { fetchProductSitemap } from "../scraper/sitemap";
 import { fetchProductPage } from "../scraper/product-page";
@@ -15,7 +17,7 @@ import { fetchProductFromErp } from "../erp/client";
 import { mergeScrapeAndErp, type MergedProduct } from "./merge";
 import { mirrorProductMedia, mirrorScrapedMedia } from "./media";
 import { upsertWooProduct } from "../woo/client";
-import { pushProductToPlugin, pollPluginQueue, pluginStatusToWoo } from "../woo/plugin-client";
+import { pushProductToPlugin, pollPluginQueue, pluginStatusToWoo, pluginPayloadHash } from "../woo/plugin-client";
 import {
   updateScrapeResult,
   updateErpResult,
@@ -24,9 +26,14 @@ import {
   updateWooQueueResult,
   listWooQueuePending,
 } from "../db/repo";
-import { safeJsonParse, parseIntEnv } from "../core";
+import { safeJsonParse, parseIntEnv, looksLikeErrorPageTitle } from "../core";
 
 export const STAGES: SyncQueueMessage["stage"][] = ["rebuild", "scrape", "erp", "merge", "media", "push"];
+
+/** Até quando uma linha recém-despachada fica fora do dreno (15 min). */
+function dispatchGraceUntil(): string {
+  return new Date(Date.now() + 15 * 60 * 1000).toISOString();
+}
 
 export async function enqueueRebuild(env: Env, opts: { reason?: string } = {}): Promise<number> {
   const id = await enqueueSyncRow(env, { stage: "rebuild", payload: opts });
@@ -41,6 +48,8 @@ export async function enqueueStage(
 ): Promise<number> {
   const id = await enqueueSyncRow(env, { stage: opts.stage, sku: opts.sku, slug: opts.slug ?? null, url: opts.url ?? null });
   await env.SYNC_QUEUE.send({ stage: opts.stage, sku: opts.sku, slug: opts.slug ?? null, url: opts.url ?? null, queue_row_id: id });
+  // Já está na fila: o dreno não deve reenviá-la enquanto ela espera a vez.
+  await markSyncRowsDispatched(env, [id], dispatchGraceUntil());
   return id;
 }
 
@@ -61,7 +70,12 @@ export async function runRebuildStage(env: Env): Promise<void> {
         sourceUrl: entry.loc,
         provisional: resolved.provisional,
       });
-      await enqueueStage(env, { stage: "scrape", sku: resolved.sku, slug: entry.slug, url: entry.loc });
+      // Só grava a linha; quem solta para a fila é o dreno do cron, no ritmo de
+      // DRAIN_BATCH_SIZE por minuto. Antes o rebuild mandava os ~3.700 scrapes
+      // direto para a fila da Cloudflare, sem freio nenhum: a origem respondia
+      // com 403 (o WAF dela se defendendo) e a loja recebia milhares de pushes
+      // por hora. Esse era o caminho por onde nasceram os "403: Forbidden".
+      await enqueueSyncRow(env, { stage: "scrape", sku: resolved.sku, slug: entry.slug, url: entry.loc });
       inserted++;
     } catch (err) {
       // Skip entries that hit constraint conflicts (e.g. shared trailing code → same SKU
@@ -334,40 +348,66 @@ export async function runPushStage(env: Env, sku: string): Promise<void> {
     return;
   }
 
-  // Nada mudou desde o último push bem-sucedido? Não empurra.
-  //
-  // O rebuild reprocessa o catálogo inteiro em ciclo, e sem esta guarda cada
-  // volta reenfileirava ~3.600 produtos no WordPress mesmo com o conteúdo
-  // idêntico. A fila de lá dá conta de ~2,5 jobs/min (produto variável com
-  // dezenas de variações e upload de imagem), então o backlog só crescia —
-  // 711 -> 1.461 numa tarde — e foi esse desequilíbrio que derrubou o banco
-  // da loja. WOO_PUSH_FORCE=1 ignora a guarda quando é preciso reempurrar tudo.
-  const jaPublicado = product.woo_status === "ok" && !!product.woo_pushed_at;
-  const mudouDesdePush =
-    !product.merged_updated_at ||
-    !product.woo_pushed_at ||
-    Date.parse(product.merged_updated_at) > Date.parse(product.woo_pushed_at);
-  if (jaPublicado && !mudouDesdePush && !isFlagOn(env.WOO_PUSH_FORCE)) {
-    await recordSyncEvent(env, {
-      sku,
-      stage: "push",
-      level: "info",
-      message: "sem mudança desde o último push — pulado",
-      context: { merged_updated_at: product.merged_updated_at, woo_pushed_at: product.woo_pushed_at },
-    });
-    return;
-  }
-
   const merged = safeJsonParse<Record<string, unknown>>(product.merged_json);
   if (!merged) throw new Error(`merged payload invalid JSON for sku=${sku}`);
   const wooSku = product.external_sku ?? sku;
+
+  // Nome de página de erro (ou vazio) nunca vai para a loja. O scraper já
+  // recusa na origem; esta é a segunda barreira, para o que já estava no D1
+  // antes da correção e para qualquer regressão futura.
+  const nome = typeof merged.name === "string" ? merged.name : "";
+  const variacoesRuins = Array.isArray(merged.variations)
+    ? (merged.variations as Array<Record<string, unknown>>).filter(
+        (v) => typeof v.title === "string" && looksLikeErrorPageTitle(v.title as string),
+      ).length
+    : 0;
+  if (looksLikeErrorPageTitle(nome) || variacoesRuins > 0) {
+    const reason = variacoesRuins
+      ? `${variacoesRuins} variação(ões) com título de página de erro — push recusado`
+      : `nome de página de erro ${JSON.stringify(nome)} — push recusado`;
+    await updateWooResult(env, sku, { status: "failed", error: reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "error", message: reason });
+    return;
+  }
+
+  // Só empurra o que MUDOU — comparando o conteúdo, não a data. A guarda antiga
+  // olhava merged_updated_at, que todo merge renova: cada rebuild reempurrava o
+  // catálogo inteiro (2.243 pushes numa hora em 01/10). Também não reenvia um
+  // conteúdo que já está esperando na fila do WordPress.
+  const payloadHash = await pluginPayloadHash(env, merged, wooSku);
+  if (!isFlagOn(env.WOO_PUSH_FORCE)) {
+    const mesmoConteudo = !!product.woo_pushed_hash && product.woo_pushed_hash === payloadHash;
+    if (mesmoConteudo && (product.woo_status === "ok" || product.woo_status === "processing")) {
+      await recordSyncEvent(env, {
+        sku,
+        stage: "push",
+        level: "info",
+        message: product.woo_status === "ok"
+          ? "conteúdo idêntico ao último push — pulado"
+          : "conteúdo idêntico já está na fila do WordPress — pulado",
+      });
+      return;
+    }
+    // Legado (antes do hash existir): este merge já foi empurrado e publicado.
+    // Adota o hash e pula, em vez de reempurrar o catálogo inteiro uma vez.
+    if (
+      !product.woo_pushed_hash &&
+      product.woo_status === "ok" &&
+      product.woo_pushed_at &&
+      product.merged_updated_at &&
+      Date.parse(product.merged_updated_at) <= Date.parse(product.woo_pushed_at)
+    ) {
+      await setWooPushedHash(env, sku, payloadHash);
+      return;
+    }
+  }
 
   const mode = (env.WOO_PUSH_MODE ?? "plugin").toLowerCase();
   if (mode === "wcrest") {
     await runPushViaWcRest(env, sku, wooSku, merged, product.woo_product_id);
     return;
   }
-  await runPushViaPlugin(env, sku, wooSku, merged, product.merged_updated_at, product.woo_product_id);
+  await runPushViaPlugin(env, sku, wooSku, merged, product.merged_updated_at, product.woo_product_id, payloadHash);
 }
 
 /**
@@ -383,6 +423,7 @@ async function runPushViaPlugin(
   merged: Record<string, unknown>,
   mergedUpdatedAt: string | null,
   existingWooId: number | null,
+  payloadHash: string | null = null,
 ): Promise<void> {
   const r = await pushProductToPlugin(env, {
     sku: wooSku,
@@ -410,6 +451,10 @@ async function runPushViaPlugin(
     response: r.response,
     error: null,
   });
+  // O WordPress aceitou este conteúdo na fila: é ele a referência do próximo
+  // "mudou ou não". Se o job falhar lá, o woo_status vira failed e a guarda
+  // deixa reempurrar mesmo com o hash igual.
+  if (payloadHash) await setWooPushedHash(env, sku, payloadHash);
   await recordSyncEvent(env, {
     sku,
     stage: "push",
@@ -536,6 +581,7 @@ export async function reconcileWooQueue(env: Env, limit: number): Promise<number
 export async function drainPendingToQueue(env: Env, limit: number): Promise<number> {
   const rows = await listPendingSyncRows(env, limit);
   let dispatched = 0;
+  const ids: number[] = [];
   for (const row of rows) {
     await env.SYNC_QUEUE.send({
       stage: row.stage as SyncQueueMessage["stage"],
@@ -544,7 +590,9 @@ export async function drainPendingToQueue(env: Env, limit: number): Promise<numb
       url: row.url,
       queue_row_id: row.id,
     });
+    ids.push(Number(row.id));
     dispatched++;
   }
+  await markSyncRowsDispatched(env, ids, dispatchGraceUntil());
   return dispatched;
 }

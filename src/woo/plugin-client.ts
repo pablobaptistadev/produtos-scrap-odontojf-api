@@ -67,6 +67,31 @@ export async function computeIdemKey(sku: string, mergedUpdatedAt?: string | nul
   return hex;
 }
 
+/** JSON com chaves ordenadas — o hash não pode depender da ordem de montagem. */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return "[" + v.map(stableStringify).join(",") + "]";
+  const o = v as Record<string, unknown>;
+  return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + stableStringify(o[k])).join(",") + "}";
+}
+
+/**
+ * Hash do CONTEÚDO que iria para a loja. Exclui idem_key e
+ * _odonto_prefer_update, que mudam a cada push sem que nada do produto mude.
+ * É ele que decide se um produto precisa ser reempurrado.
+ */
+export async function pluginPayloadHash(env: Env, merged: Record<string, any>, wooSku: string): Promise<string> {
+  const body = buildPluginPayload(merged, wooSku, {
+    skipPricing: (env.WOO_PUSH_PRICING ?? "erp").toLowerCase() === "store",
+  }) as Record<string, unknown>;
+  delete body.idem_key;
+  delete body._odonto_prefer_update;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stableStringify(body)));
+  let hex = "";
+  for (const b of new Uint8Array(digest)) hex += b.toString(16).padStart(2, "0");
+  return hex;
+}
+
 export function buildPluginPayload(
   merged: Record<string, any>,
   wooSku: string,

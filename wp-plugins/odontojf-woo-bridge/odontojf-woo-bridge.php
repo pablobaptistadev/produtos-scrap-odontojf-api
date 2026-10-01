@@ -2,13 +2,22 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.66
+ * Version: 1.0.67
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.67 - NUNCA grava nome de pagina de erro. Em 01/10 a origem devolveu 403 ao
+ *          Worker e o scraper aceitou a pagina de bloqueio como produto: 169
+ *          produtos na loja ficaram "403: Forbidden" ou "Pagina nao encontrada".
+ *          ojf_reject_error_page_payload() recusa com 422 qualquer payload cujo
+ *          nome (do pai ou de variacao) pareca titulo de erro HTTP ou esteja
+ *          vazio — no handler, que e por onde passam os jobs ja enfileirados, e
+ *          no interceptor, antes de enfileirar. Ultima barreira: vale mesmo que o
+ *          Worker regrida. Testado contra os 3.666 nomes do catalogo: zero falso
+ *          positivo.
  *  1.0.66 - ERP trocou de endereco: 45.227.82.180 parou de responder (ETIMEDOUT)
  *          e o fornecedor passou a atender por cc210ff240a8.sn.mynetname.net.
  *          Porta 8082, caminho e protocolo iguais. Alem do novo padrao, migra a
@@ -282,7 +291,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.66');
+define('OJF_BRIDGE_VERSION', '1.0.67');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

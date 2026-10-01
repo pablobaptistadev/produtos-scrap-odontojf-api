@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { fetchWithTimeout, parseIntEnv } from "../core";
+import { fetchWithTimeout, parseIntEnv, looksLikeErrorPageTitle } from "../core";
 
 /**
  * Scraper for individual product pages on dentalodontocirurgicajf.com.br.
@@ -217,12 +217,29 @@ export async function fetchProductPage(env: Env, url: string): Promise<ScrapeRes
       accept: "text/html,application/xhtml+xml",
     },
   });
+  // Resposta que não é 2xx NÃO é produto. Antes o corpo ia direto para o parse:
+  // a página de bloqueio da origem (403) não tem __NEXT_DATA__, caía no fallback
+  // de DOM, e o <title> dela — "403: Forbidden" — virava o nome do produto na
+  // loja. O status era anotado em status_code e ninguém lia.
+  if (!res.ok) {
+    throw new Error(`origem respondeu HTTP ${res.status} — página de erro não é produto (${url})`);
+  }
   const html = await res.text();
   const result = parseProductHtml(url, html);
   result.status_code = res.status;
-  if (result.id) {
-    await enrichWithSpecificData(env, result, timeoutMs);
+
+  // Mesmo com 200: sem o produto no __NEXT_DATA__ não há o que publicar. A
+  // origem é um app Next.js — toda página real de produto traz ele. Das 97
+  // páginas que caíram no fallback de DOM, nenhuma era produto: 79 eram 403,
+  // 7 eram 404 ("Página não encontrada") e 11 vieram sem título nenhum.
+  if (!result.id) {
+    throw new Error(`página sem dados de produto (HTTP ${res.status}, título ${JSON.stringify(result.title)}) — ${url}`);
   }
+  if (looksLikeErrorPageTitle(result.title)) {
+    throw new Error(`título de página de erro: ${JSON.stringify(result.title)} — ${url}`);
+  }
+
+  await enrichWithSpecificData(env, result, timeoutMs);
   return result;
 }
 

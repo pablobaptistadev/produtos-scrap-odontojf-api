@@ -1033,6 +1033,46 @@ function ojf_sync_variations($parent_id, $variations, $absorb_from = 0) {
     return $n;
 }
 
+/**
+ * O texto parece título de página de ERRO, não de produto? (>= 1.0.67)
+ *
+ * Em 01/10 a origem devolveu 403 ao Worker e o scraper aceitou a página de
+ * bloqueio como produto: 79 itens chegaram aqui como "403: Forbidden" e 7 como
+ * "Página não encontrada". O Worker já recusa na origem; esta é a última
+ * barreira — independe de qualquer versão do Worker estar certa.
+ * Mesma lista do looksLikeErrorPageTitle() do Worker.
+ */
+function ojf_looks_like_error_page_title($titulo) {
+    $t = trim((string) $titulo);
+    if ($t === '') return true;
+    return (bool) preg_match(
+        '/^\s*(?:\d{3}\s*[:\-\x{2013}]|error\b|erro\b)|forbidden|not\s+found|n[ãa]o\s+encontrad|p[áa]gina\s+n[ãa]o|access\s+denied|acesso\s+negado|attention\s+required|just\s+a\s+moment|bad\s+gateway|service\s+unavailable|gateway\s+time-?out|too\s+many\s+requests|cloudflare/iu',
+        $t
+    );
+}
+
+/** WP_Error se o payload traz nome de página de erro (no pai ou numa variação). */
+function ojf_reject_error_page_payload($data) {
+    $nome = isset($data['name']) ? (string) $data['name'] : '';
+    if (ojf_looks_like_error_page_title($nome)) {
+        return new WP_Error('error_page_title', sprintf(
+            'Nome de página de erro recusado: %s. A origem devolveu uma página de bloqueio/erro em vez do produto; nada foi gravado.',
+            wp_json_encode($nome)
+        ), ['status' => 422]);
+    }
+    if (!empty($data['variations']) && is_array($data['variations'])) {
+        foreach ($data['variations'] as $v) {
+            if (isset($v['name']) && $v['name'] !== '' && ojf_looks_like_error_page_title($v['name'])) {
+                return new WP_Error('error_page_title', sprintf(
+                    'Variação %s com nome de página de erro recusada: %s. Nada foi gravado.',
+                    (string) ($v['sku'] ?? '?'), wp_json_encode((string) $v['name'])
+                ), ['status' => 422]);
+            }
+        }
+    }
+    return null;
+}
+
 /* ── handlers (return WP_REST_Response or WP_Error) ───────────────────────── */
 
 function ojf_create_product_handler($request) {
@@ -1041,6 +1081,10 @@ function ojf_create_product_handler($request) {
     if (!is_array($data) || empty($data['sku']) || empty($data['name']) || empty($data['type'])) {
         return new WP_Error('bad_request', 'sku, name e type são obrigatórios', ['status' => 400]);
     }
+
+    // Nunca grava nome de página de erro — nem cria, nem renomeia um produto bom.
+    $recusa = ojf_reject_error_page_payload($data);
+    if ($recusa) return $recusa;
 
     $sku = (string) $data['sku'];
     $existing = ojf_find_product_id_by_sku($sku);

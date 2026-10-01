@@ -272,6 +272,14 @@ function ojf_aq_intercept($result, $server, $request) {
     // ──────────────────────────────────────────────────────────────────────
     // CREATE
     // ──────────────────────────────────────────────────────────────────────
+    // Nome de página de erro é recusado na porta, antes de enfileirar.
+    if (($endpoint === 'create' || $endpoint === 'update') && function_exists('ojf_reject_error_page_payload')) {
+        $recusa = ojf_reject_error_page_payload(is_array($data) ? $data : []);
+        if ($recusa) {
+            return ojf_aq_error('error_page_title', $recusa->get_error_message(), 422);
+        }
+    }
+
     if ($endpoint === 'create') {
         if (empty($data['sku']) || empty($data['name']) || empty($data['type'])) {
             return ojf_aq_error('missing_fields', 'Required fields: sku, name, type', 400);

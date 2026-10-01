@@ -101,3 +101,21 @@ export function generateRequestId(): string {
   crypto.getRandomValues(arr);
   return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+/**
+ * O texto parece o título de uma página de ERRO, não de um produto?
+ *
+ * Em 01/10 a origem devolveu 403 ao Worker durante o rebuild e o scraper
+ * aceitou a página de bloqueio como produto: 79 itens viraram "403: Forbidden"
+ * e 7 viraram "Página não encontrada" na loja. Esta checagem é usada no scraper,
+ * no push e (com a mesma lista) no plugin — qualquer camada que veja um título
+ * assim recusa, mesmo que a anterior tenha deixado passar.
+ */
+const ERROR_PAGE_TITLE =
+  /^\s*(?:\d{3}\s*[:\-\u2013]|error\b|erro\b)|forbidden|not\s+found|n[\u00e3a]o\s+encontrad|p[\u00e1a]gina\s+n[\u00e3a]o|access\s+denied|acesso\s+negado|attention\s+required|just\s+a\s+moment|bad\s+gateway|service\s+unavailable|gateway\s+time-?out|too\s+many\s+requests|cloudflare/i;
+
+export function looksLikeErrorPageTitle(title: string | null | undefined): boolean {
+  const t = String(title ?? "").trim();
+  if (t === "") return true; // produto sem nome também não pode ir para a loja
+  return ERROR_PAGE_TITLE.test(t);
+}

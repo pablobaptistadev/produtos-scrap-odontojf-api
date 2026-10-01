@@ -27,6 +27,7 @@ export interface ProductRow {
   woo_queue_status: string | null;
   woo_duration_ms: number | null;
   woo_pushed_at: string | null;
+  woo_pushed_hash?: string | null;
   created_at: string;
 }
 
@@ -69,8 +70,11 @@ export async function updateScrapeResult(
 ): Promise<void> {
   const ts = nowIso();
   await env.DB.prepare(
+    // Scrape que falhou NÃO apaga o último scrape bom. Antes gravava NULL: um
+    // 403 passageiro da origem destruía o título, a descrição e a galeria que
+    // já estavam certos, e o produto ficava sem nada de onde se recuperar.
     `UPDATE products
-       SET scrape_json = ?,
+       SET scrape_json = COALESCE(?, scrape_json),
            scrape_status = ?,
            scrape_updated_at = ?,
            scrape_error = ?,
@@ -404,13 +408,17 @@ export async function markSyncRowFailed(env: Env, id: number, err: string, dead:
 
 export async function listPendingSyncRows(env: Env, limit: number): Promise<SyncQueueRow[]> {
   const result = await env.DB.prepare(
+    // `pending` também respeita next_retry_at: o dreno marca a linha como
+    // despachada (carência) para não reenviá-la a cada tick enquanto ela ainda
+    // espera na fila da Cloudflare — sem isso, com a fila lenta, a mesma linha
+    // era mandada de novo todo minuto.
     `SELECT * FROM sync_queue
-       WHERE status = 'pending'
-          OR (status = 'failed' AND (next_retry_at IS NULL OR next_retry_at <= ?))
+       WHERE (status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= ?))
+          OR (status = 'failed'  AND (next_retry_at IS NULL OR next_retry_at <= ?))
        ORDER BY id ASC
        LIMIT ?`,
   )
-    .bind(nowIso(), limit)
+    .bind(nowIso(), nowIso(), limit)
     .all<SyncQueueRow>();
   return result.results;
 }
@@ -511,4 +519,20 @@ export async function setAppState(env: Env, key: string, value: string): Promise
   )
     .bind(key, value, nowIso())
     .run();
+}
+
+/** Marca linhas como despachadas para a fila: ficam fora do dreno até `until`. */
+export async function markSyncRowsDispatched(env: Env, ids: number[], untilIso: string): Promise<void> {
+  if (!ids.length) return;
+  const ph = ids.map(() => "?").join(",");
+  await env.DB.prepare(
+    `UPDATE sync_queue SET next_retry_at = ? WHERE status = 'pending' AND id IN (${ph})`,
+  )
+    .bind(untilIso, ...ids)
+    .run();
+}
+
+/** Grava o hash do payload que acabou de ser enviado ao plugin. */
+export async function setWooPushedHash(env: Env, sku: string, hash: string | null): Promise<void> {
+  await env.DB.prepare(`UPDATE products SET woo_pushed_hash = ? WHERE sku = ?`).bind(hash, sku).run();
 }

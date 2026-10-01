@@ -130,6 +130,17 @@ const MIGRATIONS: Array<{ id: string; sql: string }> = [
       ALTER TABLE products ADD COLUMN woo_pushed_at    TEXT;
     `,
   },
+  {
+    // Hash do payload efetivamente enviado ao plugin. A guarda de "sem mudança"
+    // comparava datas, e todo merge renova merged_updated_at — então cada
+    // rebuild diário reempurrava o catálogo inteiro (2.243 pushes numa hora em
+    // 01/10, 1.347 jobs encalhados na fila do WordPress, loja a 8-10s por
+    // requisição). Com o hash, só vai o que de fato mudou.
+    id: "009_woo_pushed_hash",
+    sql: `
+      ALTER TABLE products ADD COLUMN woo_pushed_hash TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(db: D1Database): Promise<{ applied: string[] }> {

@@ -96,3 +96,31 @@ describe("buildPluginPayload — faithful variations", () => {
     expect(buildPluginPayload(simple as any, "230").sku).toBe("230");
   });
 });
+
+import { pluginPayloadHash } from "../src/woo/plugin-client";
+
+describe("pluginPayloadHash — decide se um produto precisa ser reempurrado", () => {
+  const env = { WOO_PUSH_PRICING: "store" } as any;
+  const base = {
+    name: "Fórceps Adulto",
+    type: "variable",
+    slug: "forceps-odontologico-golgran",
+    description: "<p>Aço inox</p>",
+    variations: [{ sku: "411", title: "Fórceps Adulto N°150", attributes: [{ name: "variacao", option: "N°150" }] }],
+  };
+
+  it("é igual para o mesmo conteúdo, independente da ordem das chaves", async () => {
+    const reordenado = { variations: base.variations, description: base.description, slug: base.slug, type: base.type, name: base.name };
+    expect(await pluginPayloadHash(env, base, "OD-411")).toBe(await pluginPayloadHash(env, reordenado, "OD-411"));
+  });
+
+  it("muda quando o nome muda — é assim que o reparo dos '403: Forbidden' passa", async () => {
+    const ruim = { ...base, name: "403: Forbidden" };
+    expect(await pluginPayloadHash(env, base, "OD-411")).not.toBe(await pluginPayloadHash(env, ruim, "OD-411"));
+  });
+
+  it("muda quando o título de uma variação muda", async () => {
+    const outra = { ...base, variations: [{ ...base.variations[0], title: "Fórceps Adulto N°151" }] };
+    expect(await pluginPayloadHash(env, base, "OD-411")).not.toBe(await pluginPayloadHash(env, outra, "OD-411"));
+  });
+});
