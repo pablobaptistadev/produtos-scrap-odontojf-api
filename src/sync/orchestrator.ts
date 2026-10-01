@@ -26,13 +26,13 @@ import {
   updateWooQueueResult,
   listWooQueuePending,
 } from "../db/repo";
-import { safeJsonParse, parseIntEnv, looksLikeErrorPageTitle } from "../core";
+import { safeJsonParse, parseIntEnv, looksLikeErrorPageTitle, DISPATCH_GRACE_MS } from "../core";
 
 export const STAGES: SyncQueueMessage["stage"][] = ["rebuild", "scrape", "erp", "merge", "media", "push"];
 
 /** Até quando uma linha recém-despachada fica fora do dreno (15 min). */
 function dispatchGraceUntil(): string {
-  return new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  return new Date(Date.now() + DISPATCH_GRACE_MS).toISOString();
 }
 
 export async function enqueueRebuild(env: Env, opts: { reason?: string } = {}): Promise<number> {

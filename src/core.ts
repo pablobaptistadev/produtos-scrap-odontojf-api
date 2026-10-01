@@ -119,3 +119,20 @@ export function looksLikeErrorPageTitle(title: string | null | undefined): boole
   if (t === "") return true; // produto sem nome também não pode ir para a loja
   return ERROR_PAGE_TITLE.test(t);
 }
+
+/** How long a dispatched row is left alone before the drain sends it again. */
+export const DISPATCH_GRACE_MS = 15 * 60 * 1000;
+
+/**
+ * A pending row whose next_retry_at lies beyond the drain's grace was put off
+ * on purpose (an operator pushed it back to let other work through). A message
+ * for it can only be an old copy, sent before the postponement. Without this
+ * check, pushing a row back in D1 only stopped *new* dispatches: the copies
+ * already in the Cloudflare queue still ran first, and the priority did little.
+ * The drain sends the row again once its time comes.
+ */
+export function isPostponed(nextRetryAt: string | null | undefined, nowMs: number): boolean {
+  if (!nextRetryAt) return false;
+  const at = Date.parse(nextRetryAt);
+  return Number.isFinite(at) && at > nowMs + DISPATCH_GRACE_MS + 60_000;
+}

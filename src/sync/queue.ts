@@ -6,7 +6,7 @@ import {
   setNextRetryAt,
   recordSyncEvent,
 } from "../db/repo";
-import { computeRetryDelaySeconds } from "../core";
+import { computeRetryDelaySeconds, isPostponed } from "../core";
 import {
   runRebuildStage,
   runScrapeStage,
@@ -33,6 +33,10 @@ async function processOne(env: Env, msg: Message<SyncQueueMessage>): Promise<voi
       return;
     }
     if (row.status === "done" || row.status === "dead") {
+      msg.ack();
+      return;
+    }
+    if (row.status === "pending" && isPostponed(row.next_retry_at, Date.now())) {
       msg.ack();
       return;
     }
