@@ -42,7 +42,11 @@
         "max_retries": 5,
         "dead_letter_queue": "odontojf-sync-dlq",
         "max_batch_timeout": 10,
-        "max_concurrency": 1
+        // 1 foi o freio de emergência da rajada de 01/10. Com 1, a fila ficava
+        // mais atrasada que a carência de 15 min do dreno e as linhas eram
+        // re-despachadas sem nunca rodar. 2 com o WordPress acompanhando (fila
+        // do WP ~20 jobs atrás); o que limita a loja é o DRAIN_BATCH_SIZE.
+        "max_concurrency": 2
       }
     ]
   },
