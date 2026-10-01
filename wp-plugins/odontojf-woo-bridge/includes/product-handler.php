@@ -1022,6 +1022,25 @@ function ojf_sync_variations($parent_id, $variations, $absorb_from = 0) {
 
     // PILAR C (anti-órfão): remove variações que NÃO existem mais no payload.
     // O delete da variação dispara o hook que limpa a imagem dela no R2.
+    //
+    // Só com o payload COMPLETO (>= 1.0.68). Variação sem código é pulada lá em
+    // cima, e "não está na lista" não pode virar "sumiu da origem". Em 01/10 a
+    // origem bloqueou o Worker no meio do scrape e as variações vieram sem
+    // código; o PILAR C apagou as variações de 24 produtos, que ficaram sem
+    // nenhuma opção de compra. Na dúvida, sobra variação — nunca falta.
+    $sem_codigo = 0;
+    foreach ($variations as $var) {
+        if ((string) ($var['sku'] ?? '') === '') $sem_codigo++;
+    }
+    if ($sem_codigo > 0 || !$desired_skus) {
+        if ($parent && $parent->is_type('variable') && $parent->get_children()) {
+            error_log(sprintf(
+                '[ojf] PILAR C pulado no #%d: %d de %d variações do payload sem código — nada apagado',
+                (int) $parent_id, $sem_codigo, count($variations)
+            ));
+        }
+        return $n;
+    }
     if ($parent && $parent->is_type('variable')) {
         foreach ($parent->get_children() as $cid) {
             $c = wc_get_product($cid);

@@ -2,13 +2,19 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.67
+ * Version: 1.0.68
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.68 - PILAR C so apaga variacao com payload COMPLETO. Na mesma rajada de
+ *          01/10 a origem tambem bloqueou a consulta de dados das variacoes; o
+ *          Worker mandou variacoes sem codigo, o sync pulou cada uma e o PILAR C
+ *          leu "nao veio" como "sumiu da origem": 24 produtos ficaram sem as
+ *          variacoes (14 de 14 num caso), sem opcao de compra. Agora, se alguma
+ *          variacao do payload vem sem codigo (ou nenhuma tem), nada e apagado.
  *  1.0.67 - NUNCA grava nome de pagina de erro. Em 01/10 a origem devolveu 403 ao
  *          Worker e o scraper aceitou a pagina de bloqueio como produto: 169
  *          produtos na loja ficaram "403: Forbidden" ou "Pagina nao encontrada".
@@ -291,7 +297,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.67');
+define('OJF_BRIDGE_VERSION', '1.0.68');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

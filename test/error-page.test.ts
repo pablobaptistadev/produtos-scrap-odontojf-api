@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { looksLikeErrorPageTitle } from "../src/core";
 import { fetchProductPage } from "../src/scraper/product-page";
 
@@ -70,5 +72,82 @@ describe("fetchProductPage recusa o que não é produto", () => {
   it("lança em 200 sem produto no __NEXT_DATA__", async () => {
     stubResponse(200, "<html><head><title>Algo</title></head><body>sem next data</body></html>");
     await expect(fetchProductPage(env, url)).rejects.toThrow(/sem dados de produto/);
+  });
+});
+
+describe("fetchProductPage não salva variação sem código", () => {
+  // Mesma rajada de 01/10: a página do produto veio, mas a origem bloqueou parte
+  // das consultas de /api/product-specific-data. As variações ficaram sem SKU,
+  // o push foi assim mesmo e o plugin apagou as variações de 24 produtos.
+  const env = {
+    REQUEST_TIMEOUT_MS: "5000",
+    SCRAPE_BASE_URL: "https://dentalodontocirurgicajf.com.br",
+  } as any;
+  const url = "https://dentalodontocirurgicajf.com.br/resina-elora-aps-4g-fgm";
+  const html = readFileSync(join(__dirname, "fixtures", "resina-elora-variable.html"), "utf-8");
+  const bloqueada = "M0drjMmXdoH3Sli7xSxI";
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubOrigem(specific: (id: string, call: number) => Response) {
+    const calls = new Map<string, number>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const u = new URL(String(input));
+      if (!u.pathname.startsWith("/api/product-specific-data")) {
+        return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      const id = u.searchParams.get("productId")!;
+      const n = (calls.get(id) ?? 0) + 1;
+      calls.set(id, n);
+      return specific(id, n);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  it("falha o scrape inteiro se uma variação levar 403", async () => {
+    stubOrigem((id) => (id === bloqueada ? json({ error: "blocked" }, 403) : json({ id, internalId: `C-${id}` })));
+    await expect(fetchProductPage(env, url)).rejects.toThrow(/dados específicos da origem incompletos/);
+  });
+
+  it("falha se uma variação vier com corpo vazio", async () => {
+    stubOrigem((id) => (id === bloqueada ? json(null) : json({ id, internalId: `C-${id}` })));
+    await expect(fetchProductPage(env, url)).rejects.toThrow(/incompletos/);
+  });
+
+  it("tenta de novo um 403 passageiro e salva com todos os códigos", async () => {
+    stubOrigem((id, call) =>
+      id === bloqueada && call === 1 ? json({ error: "blocked" }, 403) : json({ id, internalId: `C-${id}` }),
+    );
+    const r = await fetchProductPage(env, url);
+    expect(r.variations.length).toBe(10);
+    expect(r.variations.every((v) => v.sku === `C-${v.id}`)).toBe(true);
+    expect(r.api_enriched).toBe(true);
+  });
+
+  it("não dispara mais de 4 consultas ao mesmo tempo", async () => {
+    let abertas = 0;
+    let pico = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const u = new URL(String(input));
+        if (!u.pathname.startsWith("/api/product-specific-data")) {
+          return new Response(html, { status: 200 });
+        }
+        abertas++;
+        pico = Math.max(pico, abertas);
+        await new Promise((r) => setTimeout(r, 5));
+        abertas--;
+        const id = u.searchParams.get("productId")!;
+        return json({ id, internalId: `C-${id}` });
+      }),
+    );
+    await fetchProductPage(env, url);
+    expect(pico).toBeLessThanOrEqual(4);
   });
 });
