@@ -154,24 +154,70 @@ add_action('ojf_title_brand_cron', 'ojf_title_brand_run_batch');
 
 /*
  * Nesta loja o WP-Cron está desligado (DISABLE_WP_CRON) e nada de fora chama o
- * wp-cron.php: o evento acima fica agendado e nunca roda. O lote pega carona no
- * fim de qualquer requisição que chegue ao PHP (REST do Worker, página fora do
- * cache, admin-ajax), depois que a resposta já saiu, no máximo um lote a cada
- * ~55s. Só REST (1.0.71) não bastava: com o Worker parado eram ~3 lotes/hora.
+ * wp-cron.php: o evento acima fica agendado e nunca roda. Carona em requisição
+ * também não basta — quase tudo sai do cache do LiteSpeed sem tocar o PHP
+ * (medido: 2,5 produtos/min). Então o lote se encadeia sozinho, como a fila da
+ * API: cada lote termina disparando o próximo por um admin-ajax interno não
+ * bloqueante, com uma pausa entre lotes. Qualquer requisição que chegue ao PHP
+ * religa a corrente se ela tiver morrido (fica viva por um transient de 3 min).
  */
+define('OJF_TITLE_BRAND_PAUSE', 15); // segundos entre lotes
+
+function ojf_title_brand_token() {
+    return wp_hash('ojf_title_brand_tick');
+}
+
+/** Dispara o próximo elo. $chain vazio = começa uma corrente nova. */
+function ojf_title_brand_dispatch($chain = '') {
+    $chain = $chain !== '' ? $chain : strtolower(wp_generate_password(12, false)); // sanitize_key() no handler deixa em minúsculas
+    set_transient('ojf_title_brand_chain', $chain, 3 * MINUTE_IN_SECONDS);
+    $r = wp_remote_post(admin_url('admin-ajax.php'), [
+        'timeout' => 0.01, 'blocking' => false, 'sslverify' => false,
+        'body' => ['action' => 'ojf_title_brand_tick', 'token' => ojf_title_brand_token(), 'chain' => $chain],
+    ]);
+    if (is_wp_error($r)) {
+        delete_transient('ojf_title_brand_chain');
+        error_log('[ojf] título+marca: falha ao disparar o lote: ' . $r->get_error_message());
+    }
+}
+
+function ojf_title_brand_pending() {
+    $st = ojf_title_brand_state();
+    return empty($st['done']) && ($st['rev'] ?? '') === ojf_title_brand_target_rev();
+}
+
+function ojf_title_brand_tick_handler() {
+    if (!hash_equals(ojf_title_brand_token(), (string) ($_POST['token'] ?? ''))) {
+        status_header(403);
+        exit;
+    }
+    $chain = sanitize_key((string) ($_POST['chain'] ?? ''));
+    // só uma corrente viva: um elo de corrente antiga (ou duplicada) para aqui
+    if ($chain === '' || get_transient('ojf_title_brand_chain') !== $chain) exit;
+
+    ignore_user_abort(true);
+    if (function_exists('set_time_limit')) @set_time_limit(180);
+    if (function_exists('litespeed_finish_request')) litespeed_finish_request();
+    elseif (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
+
+    set_transient('ojf_title_brand_chain', $chain, 3 * MINUTE_IN_SECONDS);
+    sleep(OJF_TITLE_BRAND_PAUSE);
+    if (get_transient('ojf_title_brand_chain') !== $chain) exit;
+    ojf_title_brand_run_batch();
+    if (ojf_title_brand_pending()) ojf_title_brand_dispatch($chain);
+    else delete_transient('ojf_title_brand_chain');
+    exit;
+}
+add_action('wp_ajax_ojf_title_brand_tick', 'ojf_title_brand_tick_handler');
+add_action('wp_ajax_nopriv_ojf_title_brand_tick', 'ojf_title_brand_tick_handler');
+
 add_action('init', function () {
     if (wp_doing_cron() || (defined('WP_CLI') && WP_CLI)) return;
-    $st = ojf_title_brand_state();
-    if (!empty($st['done']) || ($st['rev'] ?? '') !== ojf_title_brand_target_rev()) return;
-    if (get_transient('ojf_title_brand_tick')) return;
-    set_transient('ojf_title_brand_tick', 1, 55);
-    add_action('shutdown', function () {
-        if (function_exists('litespeed_finish_request')) litespeed_finish_request();
-        elseif (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
-        ignore_user_abort(true);
-        if (function_exists('set_time_limit')) @set_time_limit(120);
-        ojf_title_brand_run_batch();
-    }, 99);
+    if (wp_doing_ajax() && ($_REQUEST['action'] ?? '') === 'ojf_title_brand_tick') return;
+    if (!ojf_title_brand_pending() || get_transient('ojf_title_brand_chain')) return;
+    if (get_transient('ojf_title_brand_kick')) return; // no máximo uma tentativa por minuto
+    set_transient('ojf_title_brand_kick', 1, 60);
+    add_action('shutdown', function () { ojf_title_brand_dispatch(); }, 99);
 }, 32);
 
 /** Um lote de produtos. Seguro rodar de novo: só grava quando o título muda. */

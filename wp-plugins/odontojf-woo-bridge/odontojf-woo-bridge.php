@@ -2,13 +2,16 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.72
+ * Version: 1.0.73
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.73 - Lote titulo+marca se encadeia sozinho (admin-ajax interno nao
+ *          bloqueante, 15s entre lotes, uma corrente so). Carona em requisicao
+ *          dava 2,5 produtos/min: quase tudo sai do cache sem tocar o PHP.
  *  1.0.72 - Lote titulo+marca pega carona em qualquer requisicao PHP (nao so
  *          REST): com o Worker parado eram ~3 lotes/hora. Continua 1 lote a
  *          cada ~55s, depois da resposta.
@@ -315,7 +318,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.72');
+define('OJF_BRIDGE_VERSION', '1.0.73');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
