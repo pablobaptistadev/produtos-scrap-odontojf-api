@@ -719,7 +719,7 @@ function ojf_build_manual_attributes($attributes) {
 
 /** Apply the common (non-variation) product fields shared by create/update. */
 function ojf_apply_product_fields($product, $data) {
-    if (isset($data['name']))              $product->set_name((string) $data['name']);
+    if (isset($data['name']))              ojf_set_product_title($product, $data); // + " - MARCA" (title-brand.php)
     if (isset($data['description']))       $product->set_description((string) $data['description']);
     if (isset($data['short_description'])) $product->set_short_description((string) $data['short_description']);
     if (isset($data['slug']) && $data['slug']) $product->set_slug(sanitize_title((string) $data['slug']));

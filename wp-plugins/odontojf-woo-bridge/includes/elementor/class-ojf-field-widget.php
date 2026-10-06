@@ -238,7 +238,11 @@ class OJF_Field_Widget extends \Elementor\Widget_Base {
             // Meta primeiro: é o título próprio vindo da origem. O nome montado
             // pelo Woo ("Pai - N°150") é só o fallback.
             $own = get_post_meta($vid, self::META_TITLE, true);
-            if (is_string($own) && trim($own) !== '') return esc_html(trim($own));
+            if (is_string($own) && trim($own) !== '') {
+                return esc_html(function_exists('ojf_variation_title_with_brand')
+                    ? ojf_variation_title_with_brand($own, wp_get_post_parent_id($vid))
+                    : trim($own));
+            }
 
             $v = wc_get_product($vid);
             if (!$v) return '';

@@ -65,7 +65,11 @@ function ojf_variation_gallery_image_ids($variation_id) {
 function ojf_variation_own_title($product) {
     if (!$product instanceof WC_Product_Variation) return '';
     $own = $product->get_meta('_odontojf_variation_title', true);
-    return is_string($own) ? trim($own) : '';
+    $own = is_string($own) ? trim($own) : '';
+    // + " - MARCA" do pai, mesma regra do título do produto (title-brand.php)
+    return ($own !== '' && function_exists('ojf_variation_title_with_brand'))
+        ? ojf_variation_title_with_brand($own, $product->get_parent_id())
+        : $own;
 }
 
 add_filter('woocommerce_product_variation_title', 'ojf_variation_title_on_generate', 10, 2);

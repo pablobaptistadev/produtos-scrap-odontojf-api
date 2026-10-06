@@ -2,13 +2,28 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.68
+ * Version: 1.0.71
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.71 - Lote titulo+marca nao dependia de nada que rodasse: a loja tem
+ *          DISABLE_WP_CRON e ninguem chama o wp-cron.php. Agora pega carona no
+ *          fim das requisicoes REST (como a fila da API), 1 lote a cada ~55s,
+ *          depois que a resposta ja saiu.
+ *  1.0.70 - Lote titulo+marca: erro num produto fica registrado no estado (e o
+ *          lote pula o produto) em vez de travar em silencio; GET
+ *          /odontojf/v1/title-brand-status mostra o andamento sem admin.
+ *  1.0.69 - Marca no fim do titulo: "Nome do produto - MARCA". A busca do WP
+ *          procura no titulo, nao no atributo, e "6B" nao achava a 6B INVENT.
+ *          Regra no momento de gravar (push do Worker) e num lote em WP-Cron
+ *          (~25/min) para os produtos existentes. Nao repete a marca se o nome
+ *          ja a cita (inteira, ou a 1a palavra com 3+ letras/digito); ignora
+ *          marca com caractere quebrado do ERP; slug nao muda. Nome da origem
+ *          fica em _ojf_title_base: desligar em Configuracoes devolve o
+ *          original. Titulo proprio da variacao ganha a mesma marca.
  *  1.0.68 - PILAR C so apaga variacao com payload COMPLETO. Na mesma rajada de
  *          01/10 a origem tambem bloqueou a consulta de dados das variacoes; o
  *          Worker mandou variacoes sem codigo, o sync pulou cada uma e o PILAR C
@@ -297,7 +312,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.68');
+define('OJF_BRIDGE_VERSION', '1.0.71');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
@@ -310,6 +325,7 @@ require_once OJF_BRIDGE_DIR . 'includes/erp-client.php';      // cliente ERP (lo
 require_once OJF_BRIDGE_DIR . 'includes/product-log.php';     // log ERP + histórico de preços (custom field + metabox)
 require_once OJF_BRIDGE_DIR . 'includes/image-handler.php';   // fila de imagens + R2 (verbatim)
 require_once OJF_BRIDGE_DIR . 'includes/product-handler.php'; // handlers + rotas (atributo manual, _sku=ERP)
+require_once OJF_BRIDGE_DIR . 'includes/title-brand.php';     // "Nome - MARCA" no título (push + lote dos existentes)
 require_once OJF_BRIDGE_DIR . 'includes/cart-erp.php';        // preço/estoque ao vivo no carrinho
 require_once OJF_BRIDGE_DIR . 'includes/video.php';          // shortcode [ojf_video] (vídeo via custom field)
 require_once OJF_BRIDGE_DIR . 'includes/api-queue.php';       // interceptor + fila API + worker + dashboard (verbatim)

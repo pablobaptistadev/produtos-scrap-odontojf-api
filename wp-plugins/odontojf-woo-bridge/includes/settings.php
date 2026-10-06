@@ -72,6 +72,7 @@ function ojf_settings_page() {
     // toggle ERP no carrinho + opções de Mídia R2
     if (isset($_POST['ojf_save']) && check_admin_referer('ojf_settings_save')) {
         update_option('ojf_erp_cart_live', isset($_POST['ojf_erp_cart_live']) ? '1' : '0', false);
+        update_option('ojf_title_brand_suffix', isset($_POST['ojf_title_brand_suffix']) ? '1' : '0', false);
         update_option('ojf_media_auto_r2', isset($_POST['ojf_media_auto_r2']) ? '1' : '0', false);
         update_option('ojf_media_delete_local', isset($_POST['ojf_media_delete_local']) ? '1' : '0', false);
         $mw = isset($_POST['ojf_media_auto_maxw']) ? (int) $_POST['ojf_media_auto_maxw'] : 1600;
@@ -133,6 +134,20 @@ function ojf_settings_page() {
     echo '<label><input type="checkbox" name="ojf_erp_cart_live" value="1" ' . checked($cart_live, true, false) . ' /> ';
     echo 'Consultar <strong>preço e estoque no ERP</strong> toda vez que um produto é adicionado ao carrinho</label>';
     echo '<p class="description">Token do ERP é renovado automaticamente via login. Bloqueia o add se faltar estoque e usa o preço atual do ERP.</p></td></tr>';
+
+    // Marca no fim do título ("Nome - MARCA")
+    $tb_on = get_option('ojf_title_brand_suffix', '1') === '1';
+    $tb = function_exists('ojf_title_brand_state') ? ojf_title_brand_state() : [];
+    echo '<tr><th scope="row">Marca no título</th><td>';
+    echo '<label><input type="checkbox" name="ojf_title_brand_suffix" value="1" ' . checked($tb_on, true, false) . ' /> ';
+    echo 'Terminar o título do produto com a marca: <strong>Nome do produto - MARCA</strong></label>';
+    echo '<p class="description">Não repete a marca se o nome já a cita. A URL não muda. Desligar devolve o nome original de todos os produtos (o lote roda sozinho, ~25 produtos/min).</p>';
+    if ($tb) {
+        echo '<p class="description">Lote: ' . (!empty($tb['done']) ? '✔ concluído em ' . esc_html((string) $tb['finished']) : '⏳ em andamento (até o #' . (int) $tb['cursor'] . ')')
+            . ' — ' . (int) $tb['changed'] . ' alterados, ' . (int) $tb['kept'] . ' já certos, ' . (int) $tb['no_brand'] . ' sem marca, '
+            . (int) $tb['bad_brand'] . ' com marca quebrada no ERP, ' . (int) $tb['manual'] . ' editados à mão (respeitados).</p>';
+    }
+    echo '</td></tr>';
 
     // Mídia R2: auto-upload de todo upload do WP
     $m_auto = get_option('ojf_media_auto_r2', '0') === '1';
