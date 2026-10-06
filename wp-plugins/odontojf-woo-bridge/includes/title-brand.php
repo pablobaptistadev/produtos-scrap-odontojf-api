@@ -154,11 +154,13 @@ add_action('ojf_title_brand_cron', 'ojf_title_brand_run_batch');
 
 /*
  * Nesta loja o WP-Cron está desligado (DISABLE_WP_CRON) e nada de fora chama o
- * wp-cron.php: o evento acima fica agendado e nunca roda. Mesmo esquema da fila
- * da API: pega carona no fim de uma requisição REST (o Worker faz várias por
- * minuto), depois que a resposta já saiu, no máximo um lote a cada ~55s.
+ * wp-cron.php: o evento acima fica agendado e nunca roda. O lote pega carona no
+ * fim de qualquer requisição que chegue ao PHP (REST do Worker, página fora do
+ * cache, admin-ajax), depois que a resposta já saiu, no máximo um lote a cada
+ * ~55s. Só REST (1.0.71) não bastava: com o Worker parado eram ~3 lotes/hora.
  */
-add_action('rest_api_init', function () {
+add_action('init', function () {
+    if (wp_doing_cron() || (defined('WP_CLI') && WP_CLI)) return;
     $st = ojf_title_brand_state();
     if (!empty($st['done']) || ($st['rev'] ?? '') !== ojf_title_brand_target_rev()) return;
     if (get_transient('ojf_title_brand_tick')) return;
@@ -170,7 +172,7 @@ add_action('rest_api_init', function () {
         if (function_exists('set_time_limit')) @set_time_limit(120);
         ojf_title_brand_run_batch();
     }, 99);
-});
+}, 32);
 
 /** Um lote de produtos. Seguro rodar de novo: só grava quando o título muda. */
 function ojf_title_brand_run_batch() {
