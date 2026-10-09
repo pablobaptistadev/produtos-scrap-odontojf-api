@@ -3,8 +3,11 @@
  * Avise-me (>= 1.0.80): produto ou variação sem estoque → o cliente deixa nome,
  * e-mail e WhatsApp, e recebe um e-mail quando o item volta.
  *
- *  - Botão "Avise-me" (sino) no widget de compra (produto simples esgotado, ou
- *    a variação escolhida esgotada) e no grid (no lugar de "Adicionar").
+ *  - Na página do produto (>= 1.0.81), o formulário fica na própria página,
+ *    logo depois do "fora de estoque e indisponível" do Woo; no grid, botão
+ *    "Avise-me" (sino) no lugar de "Adicionar", que abre o popup.
+ *  - "Indisponível" = não dá para comprar: sem estoque OU sem preço (o Woo
+ *    esconde variação sem preço e mostra o produto como indisponível).
  *    Produto sob orçamento não tem Avise-me: "Solicitar orçamento" ganha.
  *  - Popup próprio (um só por página, impresso no rodapé).
  *  - Lista de espera na tabela {prefix}ojf_avise_me.
@@ -54,10 +57,34 @@ add_action('init', function () {
 
 /* ── regras ─────────────────────────────────────────────────────────────── */
 
-/** O item (produto ou variação) está disponível agora? */
+/** Dá para comprar este produto simples / esta variação agora? */
+function ojf_avise_buyable($o) {
+    if (!$o instanceof WC_Product || !$o->is_in_stock() || !$o->is_purchasable()) return false;
+    return !$o->is_type('variation') || $o->variation_is_visible();
+}
+
+/**
+ * O cliente não consegue comprar: simples sem estoque ou sem preço; variável
+ * sem nenhuma variação comprável (é quando o Woo escreve "Este produto está
+ * fora de estoque e indisponível").
+ */
+function ojf_avise_unavailable($product) {
+    if (!$product instanceof WC_Product) return false;
+    if ($product->is_type('variable')) {
+        if (!$product->is_in_stock()) return true;
+        foreach ($product->get_children() as $vid) {
+            if (ojf_avise_buyable(wc_get_product($vid))) return false;
+        }
+        return true;
+    }
+    return !ojf_avise_buyable($product);
+}
+
+/** O item esperado (produto ou variação) já pode ser comprado? */
 function ojf_avise_item_in_stock($product_id, $variation_id = 0) {
-    $o = wc_get_product($variation_id ? (int) $variation_id : (int) $product_id);
-    return $o ? $o->is_in_stock() : false;
+    if ($variation_id) return ojf_avise_buyable(wc_get_product((int) $variation_id));
+    $p = wc_get_product((int) $product_id);
+    return $p ? !ojf_avise_unavailable($p) : false;
 }
 
 function ojf_avise_blocked_by_budget($product) {
@@ -85,24 +112,71 @@ function ojf_avise_button_html($product, $variation_id = 0, $hidden = false, $co
     );
 }
 
-/** Para o widget de compra (class-ojf-add-to-cart-widget.php). */
+/**
+ * Formulário na própria página do produto. $variacao: nasce escondido e o
+ * script mostra quando a variação escolhida não pode ser comprada.
+ */
+function ojf_avise_box_html($product, $variacao = false) {
+    static $n = 0;
+    $n++;
+    $GLOBALS['ojf_avise_needed'] = true;
+    // na própria página o nome já está à vista (e o do ERP às vezes vem com
+    // acento quebrado): "este produto", ou o nome da variação escolhida
+    $id   = 'ojf-avise-b' . $n;
+    ob_start(); ?>
+<div class="ojf-avise-box<?php echo $variacao ? ' ojf-avise-box--variacao' : ''; ?>" data-ojf-avise-box data-product-id="<?php echo (int) $product->get_id(); ?>" data-product-name=""<?php echo $variacao ? ' hidden' : ''; ?>>
+  <div class="ojf-avise-box__head">
+    <span class="ojf-avise-box__bell"><?php echo ojf_avise_bell_svg(); // phpcs:ignore ?></span>
+    <div><strong class="ojf-avise-box__title">Avise-me quando chegar</strong>
+    <span class="ojf-avise-box__text">Deixe seu contato e avisamos você assim que <b data-ojf-avise-nome>este produto</b> estiver disponível.</span></div>
+  </div>
+  <form class="ojf-avise-box__form" data-ojf-avise-form novalidate>
+    <input type="hidden" name="product_id" value="<?php echo (int) $product->get_id(); ?>"><input type="hidden" name="variation_id" value="0">
+    <div class="ojf-avise__hp" aria-hidden="true"><label>Empresa <input type="text" name="empresa" tabindex="-1" autocomplete="off"></label></div>
+    <div class="ojf-avise__field" data-field="name"><label for="<?php echo $id; ?>-n">Seu nome</label><input id="<?php echo $id; ?>-n" name="name" type="text" autocomplete="name" placeholder="Como podemos te chamar?" required></div>
+    <div class="ojf-avise__field" data-field="email"><label for="<?php echo $id; ?>-e">E-mail</label><input id="<?php echo $id; ?>-e" name="email" type="email" autocomplete="email" inputmode="email" placeholder="voce@exemplo.com" required></div>
+    <div class="ojf-avise__field" data-field="whatsapp"><label for="<?php echo $id; ?>-w">WhatsApp</label><input id="<?php echo $id; ?>-w" name="whatsapp" type="tel" autocomplete="tel" inputmode="numeric" placeholder="(00) 00000-0000" maxlength="15" required></div>
+    <div class="ojf-avise__msg" role="alert"></div>
+    <button type="submit" class="ojf-avise__submit"><?php echo ojf_avise_bell_svg(); // phpcs:ignore ?><span>Avise-me</span></button>
+  </form>
+  <div class="ojf-avise-box__ok" role="status"><span class="ojf-avise__ok-ico">&#10003;</span><div><strong>Pronto!</strong> <span data-ojf-avise-ok></span></div></div>
+</div>
+<?php
+    return (string) ob_get_clean();
+}
+
+/*
+ * Página do produto: logo depois do template de compra do Woo (o Elementor Pro
+ * e o nosso widget passam por ele). Produto indisponível → formulário à vista;
+ * variável com opções compráveis → formulário escondido, aparece se a opção
+ * escolhida não puder ser comprada.
+ */
+function ojf_avise_after_add_to_cart() {
+    global $product;
+    if (!$product instanceof WC_Product || ojf_avise_blocked_by_budget($product)) return;
+    // em cada widget de compra (a página pode ter um escondido por dispositivo)
+    if (ojf_avise_unavailable($product)) echo ojf_avise_box_html($product); // phpcs:ignore
+    elseif ($product->is_type('variable')) echo ojf_avise_box_html($product, true); // phpcs:ignore
+}
+add_action('woocommerce_simple_add_to_cart', 'ojf_avise_after_add_to_cart', 31);
+add_action('woocommerce_variable_add_to_cart', 'ojf_avise_after_add_to_cart', 31);
+
+/** Widget de compra (class-ojf-add-to-cart-widget.php): o formulário já sai pelo template do Woo. */
 function ojf_avise_widget_html($product) {
-    if (!$product instanceof WC_Product || ojf_avise_blocked_by_budget($product)) return '';
-    if ($product->is_type('variable')) return ojf_avise_button_html($product, 0, true, 'variacao');
-    return $product->is_in_stock() ? '' : ojf_avise_button_html($product, 0, false, 'widget');
+    return '';
 }
 
 /* grid (listagem JetEngine com o widget "Adicionar ao carrinho" do Elementor) */
 add_filter('elementor/widget/render_content', function ($content, $widget) {
     if (!is_object($widget) || !method_exists($widget, 'get_name') || $widget->get_name() !== 'wc-add-to-cart') return $content;
     $product = wc_get_product(get_the_ID());
-    if (!$product || $product->is_in_stock() || ojf_avise_blocked_by_budget($product)) return $content;
+    if (!$product || !ojf_avise_unavailable($product) || ojf_avise_blocked_by_budget($product)) return $content;
     return ojf_avise_button_html($product, 0, false, 'grid');
 }, 25, 2);
 
 /* listas padrão do Woo (busca, relacionados) */
 add_filter('woocommerce_loop_add_to_cart_link', function ($html, $product) {
-    if (!$product instanceof WC_Product || $product->is_in_stock() || ojf_avise_blocked_by_budget($product)) return $html;
+    if (!$product instanceof WC_Product || !ojf_avise_unavailable($product) || ojf_avise_blocked_by_budget($product)) return $html;
     return ojf_avise_button_html($product, 0, false, 'grid');
 }, 25, 2);
 
@@ -185,6 +259,16 @@ add_action('woocommerce_product_set_stock_status', function ($id, $status) {
 add_action('woocommerce_variation_set_stock_status', function ($id, $status) {
     if ($status === 'instock') ojf_avise_mark_dirty();
 }, 10, 2);
+// ganhou preço (ou qualquer outra mudança) num item que alguém espera: confere
+function ojf_avise_maybe_dirty($id) {
+    global $wpdb;
+    $pid = (int) (wp_get_post_parent_id((int) $id) ?: $id);
+    $t = ojf_avise_table();
+    if (get_option('ojf_avise_db') !== OJF_AVISE_DB) return;
+    if ($wpdb->get_var($wpdb->prepare("SELECT 1 FROM {$t} WHERE product_id = %d AND status = 'waiting' LIMIT 1", $pid))) ojf_avise_mark_dirty();
+}
+add_action('woocommerce_update_product', 'ojf_avise_maybe_dirty', 20);
+add_action('woocommerce_update_product_variation', 'ojf_avise_maybe_dirty', 20);
 
 function ojf_avise_pending() {
     return (bool) get_option('ojf_avise_dirty');
@@ -240,7 +324,7 @@ function ojf_avise_send($row) {
     $from_name = get_option('woocommerce_email_from_name') ?: get_bloginfo('name');
     $from_mail = get_option('woocommerce_email_from_address') ?: get_option('admin_email');
     $headers = ['Content-Type: text/html; charset=UTF-8', sprintf('From: %s <%s>', $from_name, $from_mail)];
-    return wp_mail($row->email, sprintf('Chegou! %s voltou ao estoque', $titulo), $html, $headers);
+    return wp_mail($row->email, sprintf('Chegou! %s está disponível', $titulo), $html, $headers);
 }
 
 /** E-mail "chegou": tabelas e estilos inline (é o que os clientes de e-mail entendem). */
@@ -355,6 +439,21 @@ add_action('wp_footer', function () {
 .ojf-avise__ok-ico{width:56px;height:56px;margin:4px auto 12px;border-radius:50%;background:#e6f6ee;color:#0f7a4a;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800}
 .ojf-avise__ok p{margin:0 0 18px;font-size:14px;line-height:1.6;color:#55626e}
 .ojf-avise__ok button{width:100%;height:50px;border:0;border-radius:12px;background:<?php echo $teal; ?>;color:#fff;font:700 15px Montserrat,system-ui,sans-serif;cursor:pointer}
+.ojf-avise-box{margin:14px 0 4px;padding:18px;border:1.5px solid #cfe6e6;border-radius:14px;background:#f5fbfb;font-family:Montserrat,system-ui,sans-serif;color:#1f2d3a;text-align:left}
+.ojf-avise-box[hidden]{display:none!important}
+.ojf-avise-box__head{display:flex;gap:12px;align-items:flex-start;margin-bottom:14px}
+.ojf-avise-box__bell{flex:0 0 40px;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#e0f2f2;color:<?php echo $teal; ?>}
+.ojf-avise-box__bell svg{width:20px;height:20px}
+.ojf-avise-box__title{display:block;font-size:16px;font-weight:800;color:<?php echo $dark; ?>;margin:1px 0 3px}
+.ojf-avise-box__text{display:block;font-size:13px;line-height:1.5;color:#55626e}
+.ojf-avise-box__text b{color:#1f2d3a;font-weight:700}
+.ojf-avise-box .ojf-avise__field{margin-bottom:10px}
+.ojf-avise-box .ojf-avise__field input{height:44px;background:#fff}
+.ojf-avise-box .ojf-avise__msg{margin:0 0 8px;min-height:0}
+.ojf-avise-box .ojf-avise__submit{width:100%;height:48px;border-radius:12px;font:700 15px Montserrat,system-ui,sans-serif;cursor:pointer}
+.ojf-avise-box__ok{display:none;gap:12px;align-items:center;font-size:14px;line-height:1.5;color:#3a4652}
+.ojf-avise-box__ok .ojf-avise__ok-ico{flex:0 0 40px;width:40px;height:40px;margin:0;font-size:20px}
+.ojf-avise-box.is-done .ojf-avise-box__form{display:none}.ojf-avise-box.is-done .ojf-avise-box__ok{display:flex}
 @media (max-width:480px){.ojf-avise{align-items:flex-end;padding:0}.ojf-avise__card{max-width:none;border-radius:20px 20px 0 0}}
 </style>
 <div class="ojf-avise" id="ojf-avise" role="dialog" aria-modal="true" aria-labelledby="ojf-avise-title" hidden>
@@ -363,7 +462,7 @@ add_action('wp_footer', function () {
     <div class="ojf-avise__top">
       <div class="ojf-avise__bell"><?php echo ojf_avise_bell_svg(); // phpcs:ignore ?></div>
       <h3 class="ojf-avise__title" id="ojf-avise-title">Avise-me quando chegar</h3>
-      <p class="ojf-avise__text">Deixe seu contato e avisaremos quando "<strong data-ojf-avise-nome></strong>" voltar ao estoque.</p>
+      <p class="ojf-avise__text">Deixe seu contato e avisaremos quando "<strong data-ojf-avise-nome></strong>" estiver disponível.</p>
     </div>
     <form class="ojf-avise__form" novalidate>
       <input type="hidden" name="product_id"><input type="hidden" name="variation_id">
@@ -388,14 +487,9 @@ add_action('wp_footer', function () {
 <script id="ojf-avise-js">
 (function(){
   var REST = <?php echo wp_json_encode($rest); ?>;
-  var modal = document.getElementById('ojf-avise'); if (!modal) return;
-  var form = modal.querySelector('form'), msg = modal.querySelector('.ojf-avise__msg');
-  var nomeEl = modal.querySelector('[data-ojf-avise-nome]'), okEl = modal.querySelector('[data-ojf-avise-ok]');
-  var submit = modal.querySelector('.ojf-avise__submit'), last = null, produtoAtual = '';
+  var modal = document.getElementById('ojf-avise');
   // o campo "Seu nome" se chama name, que colide com o atributo name do <form>: sempre por seletor
-  function campo(n){ return form.querySelector('[name="' + n + '"]'); }
-  var fNome = campo('name'), fEmail = campo('email'), fPid = campo('product_id'), fVid = campo('variation_id'), fHp = campo('empresa');
-
+  function campo(form, n){ return form.querySelector('[name="' + n + '"]'); }
   function mascara(v){
     v = String(v).replace(/\D/g,'').slice(0,11);
     if (v.length <= 2) return v.length ? '(' + v : '';
@@ -403,80 +497,121 @@ add_action('wp_footer', function () {
     if (v.length <= 10) return '(' + v.slice(0,2) + ') ' + v.slice(2,6) + '-' + v.slice(6);
     return '(' + v.slice(0,2) + ') ' + v.slice(2,7) + '-' + v.slice(7);
   }
-  var wa = campo('whatsapp');
-  // erro some assim que a pessoa corrige o campo
-  form.addEventListener('input', function(e){ var f = e.target.closest('.ojf-avise__field'); if (f && f.classList.contains('is-error')){ f.classList.remove('is-error'); msg.textContent = ''; } });
-  wa.addEventListener('input', function(){ var p = wa.selectionStart, a = wa.value.length; wa.value = mascara(wa.value); var d = wa.value.length - a; try { wa.setSelectionRange(p + d, p + d); } catch(e){} });
-
-  function limpaErros(){ msg.textContent = ''; modal.querySelectorAll('.is-error').forEach(function(f){ f.classList.remove('is-error'); }); }
-  function erro(campo, texto){ msg.textContent = texto; if (campo){ var f = modal.querySelector('[data-field="'+campo+'"]'); if (f){ f.classList.add('is-error'); f.querySelector('input').focus(); } } }
-
-  function abrir(btn){
-    last = btn; limpaErros(); modal.classList.remove('is-done');
-    produtoAtual = btn.getAttribute('data-product-name') || '';
-    nomeEl.textContent = produtoAtual;
-    fPid.value = btn.getAttribute('data-product-id') || '';
-    fVid.value = btn.getAttribute('data-variation-id') || '0';
-    try { var s = JSON.parse(localStorage.getItem('ojfAvise') || '{}'); if (s.name && !fNome.value) fNome.value = s.name; if (s.email && !fEmail.value) fEmail.value = s.email; if (s.whatsapp && !wa.value) wa.value = mascara(s.whatsapp); } catch(e){}
-    modal.hidden = false; requestAnimationFrame(function(){ modal.classList.add('is-open'); });
-    document.documentElement.style.overflow = 'hidden';
-    setTimeout(function(){ (fNome.value ? (fEmail.value ? wa : fEmail) : fNome).focus(); }, 60);
+  function salvo(){ try { return JSON.parse(localStorage.getItem('ojfAvise') || '{}'); } catch(e){ return {}; } }
+  function preenche(form){
+    var s = salvo(), n = campo(form,'name'), e = campo(form,'email'), w = campo(form,'whatsapp');
+    if (s.name && !n.value) n.value = s.name; if (s.email && !e.value) e.value = s.email; if (s.whatsapp && !w.value) w.value = mascara(s.whatsapp);
   }
-  function fechar(){ modal.classList.remove('is-open'); modal.hidden = true; document.documentElement.style.overflow = ''; if (last) last.focus(); }
+  function limpaErros(form){ var m = form.querySelector('.ojf-avise__msg'); if (m) m.textContent = ''; form.querySelectorAll('.is-error').forEach(function(f){ f.classList.remove('is-error'); }); }
+  function erro(form, nome, texto){
+    form.querySelector('.ojf-avise__msg').textContent = texto;
+    if (nome){ var f = form.querySelector('[data-field="'+nome+'"]'); if (f){ f.classList.add('is-error'); f.querySelector('input').focus(); } }
+  }
+  function textoOk(el, email, produto){
+    el.innerHTML = '';
+    el.appendChild(document.createTextNode('Vamos te avisar em '));
+    var b1 = document.createElement('strong'); b1.textContent = email; el.appendChild(b1);
+    if (produto) {
+      el.appendChild(document.createTextNode(' assim que "'));
+      var b2 = document.createElement('strong'); b2.textContent = produto; el.appendChild(b2);
+      el.appendChild(document.createTextNode('" estiver disponível.'));
+    } else {
+      el.appendChild(document.createTextNode(' assim que este produto estiver disponível.'));
+    }
+  }
 
-  document.addEventListener('click', function(e){
-    var b = e.target.closest('[data-ojf-avise]');
-    if (b){ e.preventDefault(); abrir(b); return; }
-    if (e.target.closest('[data-ojf-avise-close]') || e.target === modal) fechar();
+  // máscara e limpeza de erro em qualquer formulário do Avise-me (popup ou página)
+  document.addEventListener('input', function(e){
+    var form = e.target.closest('[data-ojf-avise-form], #ojf-avise form'); if (!form) return;
+    var f = e.target.closest('.ojf-avise__field'); if (f && f.classList.contains('is-error')){ f.classList.remove('is-error'); form.querySelector('.ojf-avise__msg').textContent = ''; }
+    if (e.target.name === 'whatsapp'){ var w = e.target, p = w.selectionStart, a = w.value.length; w.value = mascara(w.value); var d = w.value.length - a; try { w.setSelectionRange(p + d, p + d); } catch(x){} }
   });
-  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && modal.classList.contains('is-open')) fechar(); });
 
-  form.addEventListener('submit', function(e){
-    e.preventDefault(); limpaErros();
-    var dados = { product_id: fPid.value, variation_id: fVid.value, name: fNome.value.trim(), email: fEmail.value.trim(), whatsapp: wa.value, empresa: fHp.value };
-    if (dados.name.length < 2) return erro('name', 'Informe seu nome.');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dados.email)) return erro('email', 'Informe um e-mail válido.');
-    var dig = wa.value.replace(/\D/g,''); if (dig.length < 10) return erro('whatsapp', 'Informe o WhatsApp com DDD.');
+  /** valida e envia; ok(dados, produto) quando salvou */
+  function enviar(form, produto, ok){
+    limpaErros(form);
+    var w = campo(form,'whatsapp'), submit = form.querySelector('.ojf-avise__submit');
+    var dados = { product_id: campo(form,'product_id').value, variation_id: campo(form,'variation_id').value, name: campo(form,'name').value.trim(), email: campo(form,'email').value.trim(), whatsapp: w.value, empresa: campo(form,'empresa').value };
+    if (dados.name.length < 2) return erro(form, 'name', 'Informe seu nome.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dados.email)) return erro(form, 'email', 'Informe um e-mail válido.');
+    var dig = w.value.replace(/\D/g,''); if (dig.length < 10) return erro(form, 'whatsapp', 'Informe o WhatsApp com DDD.');
     submit.disabled = true;
     fetch(REST, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dados), credentials: 'same-origin' })
       .then(function(r){ return r.json().catch(function(){ return { ok: false, message: 'Não conseguimos salvar agora. Tente de novo.' }; }); })
       .then(function(r){
         submit.disabled = false;
-        if (!r || !r.ok) return erro(r && r.field, (r && r.message) || 'Não conseguimos salvar agora. Tente de novo.');
+        if (!r || !r.ok) return erro(form, r && r.field, (r && r.message) || 'Não conseguimos salvar agora. Tente de novo.');
         try { localStorage.setItem('ojfAvise', JSON.stringify({ name: dados.name, email: dados.email, whatsapp: dig })); } catch(e){}
-        okEl.innerHTML = '';
-        okEl.appendChild(document.createTextNode('Vamos te avisar em '));
-        var b1 = document.createElement('strong'); b1.textContent = dados.email; okEl.appendChild(b1);
-        okEl.appendChild(document.createTextNode(' assim que "'));
-        var b2 = document.createElement('strong'); b2.textContent = produtoAtual; okEl.appendChild(b2);
-        okEl.appendChild(document.createTextNode('" voltar ao estoque.'));
-        modal.classList.add('is-done');
+        ok(dados, produto);
       })
-      .catch(function(){ submit.disabled = false; erro(null, 'Sem conexão. Tente de novo.'); });
+      .catch(function(){ submit.disabled = false; erro(form, null, 'Sem conexão. Tente de novo.'); });
+  }
+
+  // formulário na página do produto
+  document.querySelectorAll('[data-ojf-avise-box]').forEach(function(box){ preenche(box.querySelector('form')); });
+  document.addEventListener('submit', function(e){
+    var form = e.target.closest('[data-ojf-avise-form]'); if (!form) return;
+    e.preventDefault();
+    var box = form.closest('[data-ojf-avise-box]');
+    enviar(form, box.getAttribute('data-product-name') || '', function(d, produto){
+      textoOk(box.querySelector('[data-ojf-avise-ok]'), d.email, produto);
+      box.classList.add('is-done');
+    });
   });
 
-  // Produto variável: o botão aparece quando a variação escolhida está esgotada.
+  // popup (botão do grid)
+  if (modal) {
+    var mform = modal.querySelector('form'), nomeEl = modal.querySelector('[data-ojf-avise-nome]'), okEl = modal.querySelector('[data-ojf-avise-ok]');
+    var last = null, produtoAtual = '';
+    var abrir = function(btn){
+      last = btn; limpaErros(mform); modal.classList.remove('is-done');
+      produtoAtual = btn.getAttribute('data-product-name') || '';
+      nomeEl.textContent = produtoAtual;
+      campo(mform,'product_id').value = btn.getAttribute('data-product-id') || '';
+      campo(mform,'variation_id').value = btn.getAttribute('data-variation-id') || '0';
+      preenche(mform);
+      modal.hidden = false; requestAnimationFrame(function(){ modal.classList.add('is-open'); });
+      document.documentElement.style.overflow = 'hidden';
+      setTimeout(function(){ var n = campo(mform,'name'), em = campo(mform,'email'); (n.value ? (em.value ? campo(mform,'whatsapp') : em) : n).focus(); }, 60);
+    };
+    var fechar = function(){ modal.classList.remove('is-open'); modal.hidden = true; document.documentElement.style.overflow = ''; if (last) last.focus(); };
+    document.addEventListener('click', function(e){
+      var b = e.target.closest('[data-ojf-avise]');
+      if (b){ e.preventDefault(); abrir(b); return; }
+      if (e.target.closest('[data-ojf-avise-close]') || e.target === modal) fechar();
+    });
+    document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && modal.classList.contains('is-open')) fechar(); });
+    mform.addEventListener('submit', function(e){
+      e.preventDefault();
+      enviar(mform, produtoAtual, function(d, produto){ textoOk(okEl, d.email, produto); modal.classList.add('is-done'); });
+    });
+  }
+
+  // Produto variável: o formulário aparece quando a opção escolhida não pode ser comprada.
   if (window.jQuery) {
+    var caixas = function(form){ return jQuery('[data-ojf-avise-box].ojf-avise-box--variacao[data-product-id="' + (jQuery(form).attr('data-product_id') || '') + '"]'); };
     jQuery(document).on('found_variation', 'form.variations_form', function(e, v){
-      var box = jQuery(this).closest('.ojf-atc'); if (!box.length) box = jQuery(this).parent();
-      var b = box.find('.ojf-avise-btn--variacao');
-      if (!b.length) return;
-      if (v && v.is_in_stock === false) {
-        var base = b.attr('data-product-name') || '';
-        b.attr('data-variation-id', v.variation_id);
-        b.attr('data-variation-name', v.ojf_variation_title || '');
-        b[0].setAttribute('data-product-name', v.ojf_variation_title || base);
-        if (!b.attr('data-base-name')) b.attr('data-base-name', base);
-        b.prop('hidden', false);
+      var bx = caixas(this); if (!bx.length) return;
+      if (v && (v.is_in_stock === false || v.is_purchasable === false)) {
+        bx.each(function(){
+          var nome = v.ojf_variation_title || '';
+          this.setAttribute('data-product-name', nome);
+          jQuery(this).find('[data-ojf-avise-nome]').text(nome || 'este produto');
+          jQuery(this).find('input[name="variation_id"]').val(v.variation_id);
+          this.classList.remove('is-done');
+          this.hidden = false;
+        });
       } else {
-        b.prop('hidden', true);
+        bx.prop('hidden', true);
       }
     });
     jQuery(document).on('reset_data hide_variation', 'form.variations_form', function(){
-      var box = jQuery(this).closest('.ojf-atc'); if (!box.length) box = jQuery(this).parent();
-      var b = box.find('.ojf-avise-btn--variacao');
-      b.prop('hidden', true);
-      if (b.attr('data-base-name')) b.attr('data-product-name', b.attr('data-base-name'));
+      caixas(this).each(function(){
+        this.hidden = true;
+        this.setAttribute('data-product-name', '');
+        jQuery(this).find('[data-ojf-avise-nome]').text('este produto');
+        jQuery(this).find('input[name="variation_id"]').val('0');
+      });
     });
   }
 })();

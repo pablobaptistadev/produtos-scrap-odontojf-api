@@ -67,6 +67,12 @@ function ojf_apply_payload_categories($product, $data) {
     $ids   = ojf_resolve_payload_categories($data['categories'] ?? []);
     $base  = $ids ?: array_values(array_diff($atual, [$orc]));
     foreach ($atual as $t) if ($t !== $orc && ojf_term_is_store_owned($t)) $base[] = $t;
+    // onde a listagem da categoria na origem mostra o produto, embora a página
+    // dele não declare (gravado pelo lote de categorias): o push não tira
+    foreach ((array) get_post_meta($product->get_id(), '_ojf_cat_listing', true) as $t) {
+        $t = (int) $t;
+        if ($t && $t !== $orc && term_exists($t, 'product_cat') && ojf_term_in_store_tree($t)) $base[] = $t;
+    }
 
     if (array_key_exists('needs_budget', (array) $data) && $data['needs_budget'] !== null) {
         $quer_orc = (bool) $data['needs_budget'];
@@ -241,6 +247,19 @@ function ojf_catfix_step() {
         elseif ($phase === 'terms') {
             $terms = array_values((array) ($d['terms'] ?? []));
             $i = (int) $st['cursor'];
+            // categoria da origem que falta na loja: cria UMA vez, com o slug da
+            // origem e o pai da origem (só se o slug ainda não existir)
+            if ($i === 0) {
+                foreach ((array) ($d['create'] ?? []) as $c) {
+                    $slug = sanitize_title((string) ($c['slug'] ?? ''));
+                    if ($slug === '' || get_term_by('slug', $slug, 'product_cat')) continue;
+                    $pai = get_term_by('slug', sanitize_title((string) ($c['parent_slug'] ?? '')), 'product_cat');
+                    if (!$pai || is_wp_error($pai)) { $st['last_error'] = 'criar ' . $slug . ': pai não existe'; continue; }
+                    $r = wp_insert_term((string) $c['name'], 'product_cat', ['slug' => $slug, 'parent' => (int) $pai->term_id]);
+                    if (is_wp_error($r)) $st['last_error'] = 'criar ' . $slug . ': ' . $r->get_error_message();
+                    else $st['created'][] = $slug . '#' . (int) $r['term_id'];
+                }
+            }
             foreach (array_slice($terms, $i, 25) as $t) {
                 $i++;
                 if (!term_exists((int) $t['id'], 'product_cat')) continue;
@@ -268,6 +287,9 @@ function ojf_catfix_step() {
                 if (!$ids) continue;
                 $r = wp_set_object_terms($pid, $ids, 'product_cat', false);
                 if (is_wp_error($r)) { $st['last_error'] = 'produto #' . $pid . ': ' . $r->get_error_message(); continue; }
+                if (isset($d['listing'][(string) $pid])) {
+                    update_post_meta($pid, '_ojf_cat_listing', array_values(array_map('intval', (array) $d['listing'][(string) $pid])));
+                }
                 clean_post_cache($pid);
                 if (function_exists('wc_delete_product_transients')) wc_delete_product_transients($pid);
                 $st['products_updated']++;
@@ -311,7 +333,10 @@ function ojf_catfix_step() {
                       WHERE m.meta_key = '_menu_item_object_id' AND m.meta_value = %s", (string) $term->term_id
                 ));
                 if ($menu) {
-                    $alvo = $canon_by_name[ojf_catfix_norm($term->name)] ?? 0;
+                    // equivalente escolhido no arquivo; senão, o de mesmo nome
+                    $alvo = (int) ($d['menu_map'][(string) $term->term_id] ?? 0);
+                    if ($alvo && !term_exists($alvo, 'product_cat')) $alvo = 0;
+                    if (!$alvo) $alvo = $canon_by_name[ojf_catfix_norm($term->name)] ?? 0;
                     // sem equivalente: fica — a não ser que o arquivo mande apagar
                     // (o WordPress tira o item de menu junto com a categoria)
                     if (!$alvo && empty($d['delete_menu_terms'])) { $st['menu_kept']++; continue; }
@@ -376,6 +401,10 @@ function ojf_catfix_canon_by_name($d) {
 function ojf_catfix_delete_queue($d) {
     $proteger = array_map('intval', array_merge((array) ($d['canon'] ?? []), (array) ($d['keep'] ?? [])));
     $proteger[] = (int) get_option('default_product_cat');
+    foreach ((array) ($d['create'] ?? []) as $c) {
+        $t = get_term_by('slug', sanitize_title((string) ($c['slug'] ?? '')), 'product_cat');
+        if ($t && !is_wp_error($t)) $proteger[] = (int) $t->term_id;
+    }
     $todos = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'fields' => 'id=>parent']);
     if (is_wp_error($todos)) return [];
     $prof = function ($id) use ($todos) {

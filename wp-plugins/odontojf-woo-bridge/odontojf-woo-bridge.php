@@ -2,13 +2,35 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.80
+ * Version: 1.0.85
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.85 - Avise-me na pagina do produto diz "este produto" (o nome ja esta a
+ *          vista, e o do ERP as vezes vem com acento quebrado); na variacao
+ *          escolhida, o nome dela. Cache do LiteSpeed limpo a cada versao nova.
+ *  1.0.83 - Pagina da origem sem produto proprio cujo codigo do ERP ja e de
+ *          outra pagina: o push e recusado (409 sibling_same_code), em vez de
+ *          sobrescrever o produto da outra pagina ou criar um com o preco errado.
+ *  1.0.82 - SKU. Duas paginas da origem com o mesmo codigo do ERP (704, 7091,
+ *          3418, 5537, 10110) eram tratadas como duplicata e se roubavam SKU e
+ *          variacoes a cada push, ate ficarem sem SKU. Agora sao "irmaos": cada
+ *          pagina tem o seu produto e o segundo leva <sku>-p<id> (o codigo real
+ *          segue em _ojf_erp_code). sku-fix.php devolve SKU aos 17 sem SKU.
+ *  1.0.81 - AVISE-ME NA PAGINA + CATEGORIAS v2. Avise-me: formulario (nome,
+ *          e-mail, WhatsApp) na propria pagina do produto, logo depois do
+ *          "fora de estoque e indisponivel"; "indisponivel" agora inclui item
+ *          sem preco (o Woo esconde variacao sem preco), no grid tambem; quem
+ *          espera e avisado quando o item fica compravel. Categorias v2: cria
+ *          a unica categoria da origem que faltava (Agua para Injecao),
+ *          corrige 43 produtos (os que so tinham categoria-lixo, os que a
+ *          listagem da origem mostra em outra categoria), religa 13 itens de
+ *          menu a categoria equivalente da origem e apaga o lixo que sobrou.
+ *          _ojf_cat_listing: categoria em que a listagem da origem mostra o
+ *          produto sem a pagina dele declarar; o push nao tira.
  *  1.0.80 - AVISE-ME + ESTOQUE DA ORIGEM. Disponibilidade espelha a origem: o
  *          push aplica stock_status sem quantidade (manage_stock=false), tambem
  *          nas variacoes (antes elas nem recebiam status); carga inicial em
@@ -354,7 +376,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.80');
+define('OJF_BRIDGE_VERSION', '1.0.85');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
@@ -372,6 +394,7 @@ require_once OJF_BRIDGE_DIR . 'includes/jobs.php';            // lotes em segund
 require_once OJF_BRIDGE_DIR . 'includes/budget.php';          // sob orçamento: "Solicitar orçamento" no grid
 require_once OJF_BRIDGE_DIR . 'includes/avise-me.php';        // Avise-me: botão sem estoque, lista de espera, e-mail
 require_once OJF_BRIDGE_DIR . 'includes/stock-sync.php';      // disponibilidade = a da origem (carga inicial)
+require_once OJF_BRIDGE_DIR . 'includes/sku-fix.php';       // devolve SKU a quem ficou sem (pares de páginas com o mesmo código)
 require_once OJF_BRIDGE_DIR . 'includes/title-brand.php';     // "Nome - MARCA" no título (push + lote dos existentes)
 require_once OJF_BRIDGE_DIR . 'includes/cart-erp.php';        // preço/estoque ao vivo no carrinho
 require_once OJF_BRIDGE_DIR . 'includes/video.php';          // shortcode [ojf_video] (vídeo via custom field)
@@ -416,3 +439,11 @@ register_activation_hook(__FILE__, function () {
     }
     update_option('ojf_bridge_version', OJF_BRIDGE_VERSION, true);
 });
+
+// Versão nova no ar: o HTML em cache do LiteSpeed ainda é o da anterior (botões,
+// formulários, textos). Limpa uma vez por versão.
+add_action('init', function () {
+    if (get_option('ojf_bridge_cache_purged') === OJF_BRIDGE_VERSION) return;
+    update_option('ojf_bridge_cache_purged', OJF_BRIDGE_VERSION, true);
+    add_action('shutdown', function () { do_action('litespeed_purge_all'); }, 5);
+}, 50);

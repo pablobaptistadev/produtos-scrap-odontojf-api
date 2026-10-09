@@ -280,6 +280,26 @@ function ojf_payload_origin_id($data) {
     return '';
 }
 
+/**
+ * O produto #$pid é de OUTRA página da origem com o mesmo código do ERP (>= 1.0.81)?
+ *
+ * A origem tem pares de páginas para o mesmo item do ERP — "sonda-milimetrada-golgran"
+ * e "sonda-milimetrada-oms-millennium-golgran" são as duas o código 704; idem 7091,
+ * 3418, 5537, 10110. Não é duplicata nossa: cada página tem o seu id de origem e o
+ * seu slug. Tratar como gêmeo fazia um absorver o outro a cada push, um roubando SKU
+ * e variações do outro, até os dois ficarem sem SKU.
+ */
+function ojf_is_sibling_page($pid, $data) {
+    $pid  = (int) $pid;
+    $meu  = ojf_payload_origin_id($data);
+    $dele = trim((string) get_post_meta($pid, '_odontojf_scrape_id', true));
+    if ($meu === '' || $dele === '' || $meu === $dele) return false;
+    $sem_sufixo = function ($s) { return preg_replace('/-\d+$/', '', sanitize_title((string) $s)); };
+    $slug = $sem_sufixo($data['slug'] ?? '');
+    if ($slug === '' || $sem_sufixo(get_post_field('post_name', $pid)) === $slug) return false;
+    return get_post_status($pid) === 'publish';
+}
+
 /** Códigos ERP das variações que vêm no payload. @return string[] */
 function ojf_payload_variation_codes($data) {
     $out = [];
@@ -456,6 +476,14 @@ function ojf_resolve_target_product($data, $is_variable, $by_sku) {
     $canonico = $by_slug ?: $by_origin;
     $ancora   = $by_slug ? 'slug' : 'id de origem';
 
+    // Dono do SKU é a OUTRA página da origem com o mesmo código: irmão, não gêmeo.
+    // Fica de fora (nem alvo, nem absorvido); o SKU deste leva sufixo no handler.
+    $irmao = 0;
+    if ($by_sku && $by_sku !== $canonico && ojf_is_sibling_page($by_sku, $data)) {
+        $irmao  = $by_sku;
+        $by_sku = 0;
+    }
+
     // Todo o resto que aponta para outro produto é gêmeo a absorver.
     $gemeos = [];
     foreach ([$by_sku, $by_origin] as $cand) {
@@ -488,10 +516,23 @@ function ojf_resolve_target_product($data, $is_variable, $by_sku) {
         $ok = ojf_check_adoption_overlap($canonico, $codes, $is_variable, $ancora);
         if (is_wp_error($ok)) return $ok;
         return [
-            'id'   => $canonico,
-            'via'  => $ancora . ($twin ? ' (duplicata #' . $twin . ' absorvida)' : ''),
-            'twin' => $twin,
+            'id'      => $canonico,
+            'via'     => $ancora . ($twin ? ' (duplicata #' . $twin . ' absorvida)' : '') . ($irmao ? ' (irmão #' . $irmao . ')' : ''),
+            'twin'    => $twin,
+            'sibling' => $irmao,
         ];
+    }
+
+    // 3. página sem produto próprio cujo código já é de um irmão: recusa. Escrever
+    //    no irmão trocaria fotos/descrição/categorias dele pelas desta página (era o
+    //    pingue-pongue); criar um produto novo venderia com o preço do código do
+    //    outro item, quando o código na origem está errado (ex.: o "kit acabamento
+    //    master" com o código do dreno). Fica para decidir à mão.
+    if ($irmao) {
+        return new WP_Error('sibling_same_code', sprintf(
+            'Esta página da origem (%s) usa o mesmo código do ERP que o produto #%d, que é de outra página. Recusado: escrever nele trocaria o conteúdo do outro produto, e criar um novo venderia com o preço do código dele.',
+            (string) ($data['slug'] ?? '?'), $irmao
+        ), ['status' => 409]);
     }
 
     // 4. nem slug nem SKU: quem é o dono atual das variações do payload?
@@ -1115,10 +1156,12 @@ function ojf_create_product_handler($request) {
     $resolved = ojf_resolve_target_product($data, $is_variable, $existing);
     if (is_wp_error($resolved)) return $resolved;
     $twin_id = (int) $resolved['twin'];
+    $sibling = (int) ($resolved['sibling'] ?? 0);
     if ((int) $resolved['id'] && (int) $resolved['id'] !== (int) $existing) {
         $existing     = (int) $resolved['id'];
         $adopted_from = (string) get_post_meta($existing, '_sku', true);
     }
+    if ($sibling && (int) $existing === $sibling) $existing = 0; // o SKU achou o irmão: não é este
 
     try {
         // PILAR B (anti-órfão): no UPDATE, guarda os anexos atuais ANTES de
@@ -1131,9 +1174,18 @@ function ojf_create_product_handler($request) {
         if ($existing) {
             $product = $is_variable ? new WC_Product_Variable($existing) : wc_get_product($existing);
             if (!$product) $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
+            // Irmão dono do código: este fica com <sku>-p<id> (o código real segue em
+            // _ojf_erp_code, que é o que o carrinho consulta). Nunca tira do irmão.
+            if ($sibling) {
+                $proprio = $sku . '-p' . (int) $existing;
+                if ((string) $product->get_sku() !== $proprio) {
+                    ojf_free_orphan_sku($proprio, (int) $existing);
+                    $product->set_sku($proprio);
+                }
+            }
             // Adotado por slug/variações: re-chaveia o _sku no produto que já existe,
             // em vez de deixar um segundo produto nascer com o SKU novo.
-            if ($adopted_from !== '' && $adopted_from !== $sku) {
+            elseif ($adopted_from !== '' && $adopted_from !== $sku) {
                 ojf_release_sku_from_product($sku, $existing);
                 // E também quem só ficou no lookup, sem postmeta: é ele que faz
                 // o Woo recusar o código por um dono que já não existe.
@@ -1154,14 +1206,20 @@ function ojf_create_product_handler($request) {
                 ), ['status' => 409]);
             }
             $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
-            // Libera o SKU de variações órfãs antes do pai reivindicar (evita
-            // "SKU inválido ou duplicado" quando uma variação cru segurava o código).
-            ojf_free_sku_global($sku, $existing ?: 0);
-            $product->set_sku($sku);
+            if (!$sibling) {
+                // Libera o SKU de variações órfãs antes do pai reivindicar (evita
+                // "SKU inválido ou duplicado" quando uma variação cru segurava o código).
+                ojf_free_sku_global($sku, $existing ?: 0);
+                $product->set_sku($sku);
+            } // irmão: o SKU com sufixo precisa do id, sai depois do save
         }
         ojf_apply_product_fields($product, $data);
         $product_id = $product->save();
         if (!$product_id) throw new Exception('save() retornou 0');
+        if ($sibling && (string) $product->get_sku() === '') {
+            $product->set_sku($sku . '-p' . (int) $product_id);
+            $product->save();
+        }
 
         $vcount = 0;
         if ($is_variable) {

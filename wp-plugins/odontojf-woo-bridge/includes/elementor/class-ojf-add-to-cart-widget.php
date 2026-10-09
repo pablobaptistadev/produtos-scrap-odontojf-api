@@ -635,8 +635,8 @@ class OJF_Add_To_Cart_Widget extends \Elementor\Widget_Base {
         $markup = $this->decorateQuantity($markup, $settings);
         echo $this->decorateButton($markup, $settings); // phpcs:ignore WordPress.Security.EscapeOutput
 
-        // Avise-me (avise-me.php): simples esgotado já vem visível; no variável
-        // nasce escondido e aparece quando a variação escolhida está esgotada.
+        // Avise-me (avise-me.php): o formulário sai pelo template do Woo acima,
+        // à vista quando o produto não pode ser comprado; esta chamada ficou vazia.
         if (function_exists('ojf_avise_widget_html')) echo ojf_avise_widget_html($product); // phpcs:ignore
 
         echo '</div>';
