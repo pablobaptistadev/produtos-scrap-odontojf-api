@@ -2,13 +2,19 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.76
+ * Version: 1.0.78
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.78 - Categoria Orcamento vai para o 1o nivel (era filha de Cadeira
+ *          Odontologica e a bomba de vacuo aparecia entre as cadeiras).
+ *  1.0.77 - Produto na categoria Orcamento: no grid (listagem JetEngine com o
+ *          widget "Adicionar ao carrinho" do Elementor, e listas padrao do Woo)
+ *          o botao vira "Solicitar orcamento" e leva para a pagina do produto;
+ *          sem preco no grid.
  *  1.0.76 - Pagina do produto: Marca na PRIMEIRA linha da tabela de atributos,
  *          com rotulo "Marca" (era a ultima, escondida no bloco recolhido, e
  *          saia "marca"). Sem o atributo, usa o meta _odontojf_brand.
@@ -335,7 +341,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.76');
+define('OJF_BRIDGE_VERSION', '1.0.78');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
@@ -349,6 +355,7 @@ require_once OJF_BRIDGE_DIR . 'includes/product-log.php';     // log ERP + hist�
 require_once OJF_BRIDGE_DIR . 'includes/image-handler.php';   // fila de imagens + R2 (verbatim)
 require_once OJF_BRIDGE_DIR . 'includes/product-handler.php'; // handlers + rotas (atributo manual, _sku=ERP)
 require_once OJF_BRIDGE_DIR . 'includes/categories.php';      // categorias = as da origem, por slug; nunca cria + limpeza
+require_once OJF_BRIDGE_DIR . 'includes/budget.php';          // sob orçamento: "Solicitar orçamento" no grid
 require_once OJF_BRIDGE_DIR . 'includes/title-brand.php';     // "Nome - MARCA" no título (push + lote dos existentes)
 require_once OJF_BRIDGE_DIR . 'includes/cart-erp.php';        // preço/estoque ao vivo no carrinho
 require_once OJF_BRIDGE_DIR . 'includes/video.php';          // shortcode [ojf_video] (vídeo via custom field)
