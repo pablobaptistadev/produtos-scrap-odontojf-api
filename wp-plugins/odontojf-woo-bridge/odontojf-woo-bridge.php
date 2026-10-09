@@ -2,13 +2,22 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.74
+ * Version: 1.0.76
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.76 - Pagina do produto: Marca na PRIMEIRA linha da tabela de atributos,
+ *          com rotulo "Marca" (era a ultima, escondida no bloco recolhido, e
+ *          saia "marca"). Sem o atributo, usa o meta _odontojf_brand.
+ *  1.0.75 - Limpeza em 2 etapas: backup em uploads/ojf-backup, arvore + produtos,
+ *          PARA; apagar so com allow_delete no arquivo de dados. Protege as
+ *          categorias do plugin Listas de Estudantes ("Listas estudantes",
+ *          "Brindes" e toda lista criada depois) e "Lancamentos": nunca entram
+ *          na fila de apagar e o push nao as tira do produto. Devolve 2 produtos
+ *          que a etapa 1 tirou da categoria da lista. "Loja" vira "Principais".
  *  1.0.74 - CATEGORIAS = AS DA ORIGEM. O push so MARCA: cada categoria do
  *          payload e procurada pelo slug da origem dentro da arvore "Loja";
  *          nao achou = ignora; nunca cria (era o breadcrumb por nome que criava
@@ -326,7 +335,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.74');
+define('OJF_BRIDGE_VERSION', '1.0.76');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 

@@ -47,12 +47,26 @@ function ojf_resolve_payload_categories($cats) {
     return array_values(array_unique($ids));
 }
 
+/**
+ * Categorias que não são da origem e o push nunca tira: as do plugin Listas de
+ * Estudantes (a da lista e "Brindes", que a regra de brinde confere) e as fixas
+ * da loja ("Lançamentos").
+ */
+function ojf_term_is_store_owned($term_id) {
+    $term_id = (int) $term_id;
+    if (in_array($term_id, array_map('intval', (array) get_option('ojf_cat_keep', [91676])), true)) return true;
+    $raizes = array_map('intval', (array) get_option('ojf_cat_keep_subtrees', [91693, 91694]));
+    if (in_array($term_id, $raizes, true)) return true;
+    return (bool) array_intersect($raizes, array_map('intval', get_ancestors($term_id, 'product_cat', 'taxonomy')));
+}
+
 /** Aplica no produto: categorias da origem + Orçamento conforme needs_budget. Nunca cria termo. */
 function ojf_apply_payload_categories($product, $data) {
     $orc   = ojf_budget_cat_id();
     $atual = array_map('intval', (array) $product->get_category_ids());
     $ids   = ojf_resolve_payload_categories($data['categories'] ?? []);
     $base  = $ids ?: array_values(array_diff($atual, [$orc]));
+    foreach ($atual as $t) if ($t !== $orc && ojf_term_is_store_owned($t)) $base[] = $t;
 
     if (array_key_exists('needs_budget', (array) $data) && $data['needs_budget'] !== null) {
         $quer_orc = (bool) $data['needs_budget'];
@@ -104,6 +118,32 @@ function ojf_catfix_data() {
     return $d;
 }
 
+/**
+ * Versão e liberação do arquivo de dados, guardadas numa option autoload e
+ * relidas só quando o arquivo muda (filemtime). Assim nenhuma requisição comum
+ * decodifica os ~100 KB do JSON. Quando o arquivo muda, grava também as opções
+ * que o push usa (raiz da árvore, Orçamento, proteções, redirecionamentos).
+ */
+function ojf_catfix_meta() {
+    static $m = null;
+    if ($m !== null) return $m;
+    $mt = is_readable(OJF_CATFIX_FILE) ? (int) filemtime(OJF_CATFIX_FILE) : 0;
+    $m  = get_option('ojf_catfix_meta', []);
+    if (!is_array($m) || ($m['mtime'] ?? -1) !== $mt) {
+        $d = ojf_catfix_data();
+        $m = ['mtime' => $mt, 'version' => (string) ($d['version'] ?? ''), 'allow_delete' => !empty($d['allow_delete'])];
+        update_option('ojf_catfix_meta', $m, true);
+        if (!empty($d['version'])) {
+            if (!empty($d['root'])) update_option('ojf_cat_root', (int) $d['root'], true);
+            if (!empty($d['budget_term'])) update_option('ojf_budget_cat', (int) $d['budget_term'], true);
+            update_option('ojf_catfix_redirects', (array) ($d['redirect_slugs'] ?? []), true);
+            update_option('ojf_cat_keep_subtrees', array_map('intval', (array) ($d['keep_subtrees'] ?? [91693, 91694])), true);
+            update_option('ojf_cat_keep', array_values(array_diff(array_map('intval', (array) ($d['keep'] ?? [])), [(int) ($d['root'] ?? 0), (int) ($d['budget_term'] ?? 0)])), true);
+        }
+    }
+    return $m;
+}
+
 function ojf_catfix_state() {
     $s = get_option('ojf_catfix_state', []);
     return is_array($s) ? $s : [];
@@ -114,22 +154,24 @@ function ojf_catfix_save($st) {
 }
 
 function ojf_catfix_pending() {
-    $d = ojf_catfix_data();
-    if (empty($d['version'])) return false;
+    $m = ojf_catfix_meta();
+    if ($m['version'] === '') return false;
     $st = ojf_catfix_state();
-    return ($st['version'] ?? '') !== $d['version'] || ($st['phase'] ?? '') !== 'done';
+    if (($st['version'] ?? '') !== $m['version']) return true;
+    $phase = $st['phase'] ?? '';
+    if ($phase === 'done') return false;
+    // Etapa 1 pronta: só segue para apagar quando o arquivo de dados liberar.
+    if ($phase === 'wait_delete') return !empty($m['allow_delete']);
+    return true;
 }
 
 add_action('init', function () {
-    $d = ojf_catfix_data();
-    if (empty($d['version'])) return;
+    $m = ojf_catfix_meta();
+    if ($m['version'] === '') return;
     $st = ojf_catfix_state();
-    if (($st['version'] ?? '') !== $d['version']) {
-        if (!empty($d['root'])) update_option('ojf_cat_root', (int) $d['root'], false);
-        if (!empty($d['budget_term'])) update_option('ojf_budget_cat', (int) $d['budget_term'], false);
-        update_option('ojf_catfix_redirects', (array) ($d['redirect_slugs'] ?? []), false);
+    if (($st['version'] ?? '') !== $m['version']) {
         ojf_catfix_save([
-            'version' => $d['version'], 'phase' => 'terms', 'cursor' => 0,
+            'version' => $m['version'], 'phase' => 'backup', 'cursor' => 0, 'backup_file' => null,
             'started' => current_time('mysql'), 'finished' => null,
             'terms_updated' => 0, 'products_updated' => 0, 'products_missing' => 0,
             'deleted' => 0, 'kept_with_products' => 0, 'menu_repointed' => 0, 'menu_kept' => 0,
@@ -148,7 +190,55 @@ function ojf_catfix_step() {
     try {
         $phase = $st['phase'] ?? 'done';
 
-        if ($phase === 'terms') {
+        if ($phase === 'wait_delete' && !empty($d['allow_delete'])) {
+            // devolve marcações que a etapa 1 tirou e não devia (ex.: produto na
+            // categoria da sua lista de estudantes) — acrescenta, não substitui
+            if (!empty($d['append']) && ($st['appended'] ?? '') !== ($d['append_rev'] ?? '1')) {
+                $n = 0;
+                foreach ((array) $d['append'] as $pid => $tids) {
+                    if (get_post_type((int) $pid) !== 'product') continue;
+                    $ok = array_values(array_filter(array_map('intval', (array) $tids), function ($t) { return (bool) term_exists($t, 'product_cat'); }));
+                    if ($ok && !is_wp_error(wp_set_object_terms((int) $pid, $ok, 'product_cat', true))) { clean_post_cache((int) $pid); $n++; }
+                }
+                $st['appended'] = $d['append_rev'] ?? '1';
+                $st['appended_products'] = $n;
+            }
+            $st['phase'] = 'delete'; $st['cursor'] = 0; $st['queue'] = ojf_catfix_delete_queue($d);
+            $phase = 'delete';
+        }
+
+        if ($phase === 'backup') {
+            // Antes de tocar em qualquer coisa: todas as categorias e as categorias
+            // de cada produto, para dar para voltar exatamente ao estado de antes.
+            $terms = $wpdb->get_results(
+                "SELECT t.term_id, t.name, t.slug, tt.parent, tt.term_taxonomy_id, tt.count
+                   FROM {$wpdb->terms} t JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id
+                  WHERE tt.taxonomy = 'product_cat'", ARRAY_A);
+            $rels = $wpdb->get_results(
+                "SELECT tr.object_id, tt.term_id
+                   FROM {$wpdb->term_relationships} tr JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                  WHERE tt.taxonomy = 'product_cat'", ARRAY_A);
+            $menu = $wpdb->get_results(
+                "SELECT m.post_id, m.meta_value AS term_id FROM {$wpdb->postmeta} m
+                   JOIN {$wpdb->postmeta} o ON o.post_id = m.post_id AND o.meta_key = '_menu_item_object' AND o.meta_value = 'product_cat'
+                  WHERE m.meta_key = '_menu_item_object_id'", ARRAY_A);
+            $up  = wp_upload_dir();
+            $dir = trailingslashit($up['basedir']) . 'ojf-backup';
+            wp_mkdir_p($dir);
+            if (!file_exists($dir . '/index.php')) file_put_contents($dir . '/index.php', '<?php // silence');
+            $file = $dir . '/categorias-' . sanitize_key($d['version']) . '-' . gmdate('Ymd-His') . '-' . wp_generate_password(8, false) . '.json';
+            $ok = file_put_contents($file, wp_json_encode([
+                'created' => gmdate('c'), 'version' => $d['version'],
+                'terms' => $terms, 'relationships' => $rels, 'menu_items' => $menu,
+            ]));
+            if (!$ok) throw new \RuntimeException('não consegui gravar o backup em ' . $dir);
+            $st['backup_file'] = basename($file);
+            $st['backup_terms'] = count($terms);
+            $st['backup_relationships'] = count($rels);
+            $st['phase'] = 'terms'; $st['cursor'] = 0;
+        }
+
+        elseif ($phase === 'terms') {
             $terms = array_values((array) ($d['terms'] ?? []));
             $i = (int) $st['cursor'];
             foreach (array_slice($terms, $i, 25) as $t) {
@@ -183,7 +273,10 @@ function ojf_catfix_step() {
                 $st['products_updated']++;
             }
             $st['cursor'] = $i;
-            if ($i >= count($keys)) { $st['phase'] = 'delete'; $st['cursor'] = 0; $st['queue'] = ojf_catfix_delete_queue($d); }
+            if ($i >= count($keys)) {
+                if (!empty($d['allow_delete'])) { $st['phase'] = 'delete'; $st['cursor'] = 0; $st['queue'] = ojf_catfix_delete_queue($d); }
+                else { $st['phase'] = 'recount'; $st['cursor'] = 0; } // etapa 1: recontar e parar
+            }
         }
 
         elseif ($phase === 'delete') {
@@ -214,7 +307,7 @@ function ojf_catfix_step() {
                 elseif (is_wp_error($r)) $st['last_error'] = 'apagar #' . (int) $term->term_id . ': ' . $r->get_error_message();
             }
             $st['cursor'] = $i;
-            if ($i >= count($queue)) { $st['phase'] = 'recount'; $st['cursor'] = 0; unset($st['queue']); }
+            if ($i >= count($queue)) { $st['phase'] = 'recount'; $st['cursor'] = 0; $st['delete_done'] = true; unset($st['queue']); }
         }
 
         elseif ($phase === 'recount') {
@@ -224,6 +317,13 @@ function ojf_catfix_step() {
             delete_transient('wc_term_counts');
             clean_taxonomy_cache('product_cat');
             do_action('litespeed_purge_all');
+            if (empty($st['delete_done'])) {
+                $st['phase'] = !empty($d['allow_delete']) ? 'delete' : 'wait_delete';
+                if ($st['phase'] === 'delete') { $st['cursor'] = 0; $st['queue'] = ojf_catfix_delete_queue($d); }
+                $st['stage1_finished'] = current_time('mysql');
+                error_log('[ojf] categorias: etapa 1 concluída (árvore + produtos), aguardando liberação para apagar');
+                return;
+            }
             $st['phase'] = 'done';
             $st['finished'] = current_time('mysql');
             error_log('[ojf] limpeza de categorias concluída: ' . wp_json_encode($st));
@@ -266,9 +366,20 @@ function ojf_catfix_delete_queue($d) {
         while (!empty($todos[$id]) && $n < 50) { $id = (int) $todos[$id]; $n++; }
         return $n;
     };
+    // Subárvores de outros plugins (Listas de Estudantes: "Listas estudantes" e
+    // "Brindes"): nada dentro delas é lixo, nem as listas criadas depois.
+    $raizes = array_map('intval', (array) ($d['keep_subtrees'] ?? []));
+    $dentro = function ($id) use ($todos, $raizes) {
+        $n = 0;
+        while ($id && $n < 50) {
+            if (in_array((int) $id, $raizes, true)) return true;
+            $id = (int) ($todos[$id] ?? 0); $n++;
+        }
+        return false;
+    };
     $fila = [];
     foreach (array_keys($todos) as $id) {
-        if (in_array((int) $id, $proteger, true)) continue;
+        if (in_array((int) $id, $proteger, true) || $dentro((int) $id)) continue;
         $fila[(int) $id] = $prof((int) $id);
     }
     arsort($fila); // mais fundo primeiro

@@ -624,3 +624,33 @@ JS;
 
     wp_add_inline_script('wc-add-to-cart-variation', $js);
 }
+
+/*
+ * Marca sempre na primeira linha da tabela de atributos (>= 1.0.76).
+ *
+ * A tabela do Woo (wc_display_product_attributes) lista Peso, Dimensões e só
+ * depois os atributos — e na página do produto ela aparece recolhida, mostrando
+ * as primeiras linhas: a marca ficava escondida. O atributo é manual e o rótulo
+ * saía como o nome cru ("marca"). Aqui a linha vai para o topo com rótulo
+ * "Marca"; se o produto não tiver o atributo mas tiver o meta _odontojf_brand,
+ * a linha é criada a partir dele.
+ */
+add_filter('woocommerce_display_product_attributes', 'ojf_pp_brand_first', 20, 2);
+function ojf_pp_brand_first($attrs, $product) {
+    if (!is_array($attrs)) return $attrs;
+    $key = null;
+    foreach (array_keys($attrs) as $k) {
+        if (preg_match('/^attribute_(pa_)?marca$/', (string) $k)) { $key = $k; break; }
+    }
+    if ($key !== null) {
+        $row = $attrs[$key];
+        $row['label'] = 'Marca';
+        unset($attrs[$key]);
+    } else {
+        $brand = $product instanceof WC_Product ? trim((string) $product->get_meta('_odontojf_brand', true)) : '';
+        if ($brand === '') return $attrs;
+        $key = 'attribute_marca';
+        $row = ['label' => 'Marca', 'value' => wpautop(esc_html($brand))];
+    }
+    return [$key => $row] + $attrs;
+}
