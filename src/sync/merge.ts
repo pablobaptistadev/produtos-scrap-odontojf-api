@@ -145,6 +145,18 @@ function asString(v: unknown): string | null {
   return null;
 }
 
+/**
+ * Text from the ERP. NBSP (the ERP pads with it) becomes a plain space. Text
+ * that still carries U+FFFD was decoded wrong upstream and is lost — returns
+ * null so the caller falls back to the origin's copy instead of publishing "�".
+ */
+export function erpText(v: unknown): string | null {
+  const s = asString(v);
+  if (s == null) return null;
+  if (s.includes("\uFFFD")) return null;
+  return s.replace(/\u00A0/g, " ").replace(/[ \t]{2,}/g, " ").trim() || null;
+}
+
 function asNumber(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number" && Number.isFinite(v)) return v;
@@ -204,8 +216,8 @@ function buildErpAttributes(erp: any): MergedAttribute[] {
   const out: MergedAttribute[] = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
-    const name = asString((item as any).atributo ?? (item as any).nome);
-    const value = asString((item as any).valorAtributo ?? (item as any).valor);
+    const name = erpText((item as any).atributo ?? (item as any).nome);
+    const value = erpText((item as any).valorAtributo ?? (item as any).valor);
     if (!name || !value) continue;
     out.push({ name, options: [value], variation: false, visible: true });
   }
@@ -244,17 +256,17 @@ export function mergeScrapeAndErp(input: {
     erpAtivo === false ? "draft" : erpAtivo === true ? "publish" : null;
 
   // ---------- copy from ERP, fall back to scraper ----------
-  const erpName = asString(pickFromErp(erp, ["descricao", "Descricao", "name", "title"]));
-  const erpLongDescription = asString(
+  const erpName = erpText(pickFromErp(erp, ["descricao", "Descricao", "name", "title"]));
+  const erpLongDescription = erpText(
     pickFromErp(erp, ["descricaoDetalhada", "descricao_detalhada", "descricao_longa", "DescricaoCompleta", "long_description"]),
   );
-  const erpShortDescription = asString(
+  const erpShortDescription = erpText(
     pickFromErp(erp, ["descricaoComplementar", "descricao_complementar", "descricao_curta", "short_description"]),
   );
   const erpPrice = asNumber(pickFromErp(erp, ["preco", "valor", "preco_venda", "PrecoVenda", "price"]));
   const erpSalePrice = asNumber(pickFromErp(erp, ["precoPromocional", "preco_promocional", "sale_price"]));
   const erpStockQty = asNumber(pickFromErp(erp, ["estoque", "quantidade", "saldo", "Estoque", "stock_quantity"]));
-  const erpBrand = asString(pickFromErp(erp, ["marca", "Marca", "brand"]));
+  const erpBrand = erpText(pickFromErp(erp, ["marca", "Marca", "brand"]));
   const erpProvider = asString(
     pickFromErp(erp, ["fornecedorReferenciaCodigo", "codigo_fornecedor", "providerCode", "provider_code"]),
   );
