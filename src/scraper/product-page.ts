@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { fetchWithTimeout, parseIntEnv } from "../core";
+import { fetchWithTimeout, parseIntEnv, looksLikeErrorPageTitle } from "../core";
 
 /**
  * Scraper for individual product pages on dentalodontocirurgicajf.com.br.
@@ -46,10 +46,25 @@ export interface ScrapeVariation {
   sku: string | null;
   /** label shown in the variation table (e.g. "A1", "DB-A3,5") */
   name: string;
+  /** the child's own product title (e.g. "Fórceps Adulto N°150"). On the origin
+   *  every variation is a standalone product with its own title — `name` above
+   *  is only the selector label. */
+  title: string | null;
+  /** the child's own description HTML. Distinct per variation on most families
+   *  (a few duplicate the parent's — the merge keeps whatever is here). */
+  description: string | null;
+  /** the child's own slug, which is also its page URL on the origin. Used to
+   *  fetch the full gallery, since the parent's `options[]` is truncated. */
+  slug: string | null;
   /** manufacturer / supplier reference (initialData.options[i].providerCode) */
   provider_code: string | null;
   price: string | null;
   price_text: string | null;
+  /** offer ("de") fields — null unless this variation is on offer at scrape time */
+  old_price: string | null;
+  old_price_text: string | null;
+  discount: number | null;
+  bigger_discount: number | null;
   stock_status: "in_stock" | "out_of_stock" | null;
   stock_qty: number | null;
   barcode: string | null;
@@ -69,11 +84,24 @@ export interface ScrapeResult {
   url: string;
   slug: string;
   type: "simple" | "variable";
+  /** Raw `initialData.type` from the origin: "family" (a variation group),
+   *  "familyProduct" (a CHILD of a group — must never become its own product)
+   *  or "singleProduct". Kept so the pipeline can refuse to ingest children. */
+  origin_type: string | null;
   /** internal site id (e.g. "Bico64qhnV5r5HfprQZf") */
   id: string | null;
   title: string | null;
   brand: string | null;
   category: string[];
+  /**
+   * The product's categories as the origin store has them, by SLUG: each leaf
+   * category plus every parent the origin lists for it (a category can sit
+   * under more than one). This is what the plugin matches against — names are
+   * ambiguous and the ERP's are not the store's.
+   */
+  category_refs: Array<{ name: string; slug: string }>;
+  /** The origin shows "Solicitar orçamento" instead of a price (initialData.needsBudget). */
+  needs_budget: boolean | null;
   short_description: string | null;
   description: string | null;
   description_html: string | null;
@@ -93,6 +121,11 @@ export interface ScrapeResult {
   /** simple-product fields (null on variable products) */
   price: string | null;
   price_text: string | null;
+  /** offer ("de") fields — null unless the product is on offer at scrape time */
+  old_price: string | null;
+  old_price_text: string | null;
+  discount: number | null;
+  bigger_discount: number | null;
   installments: string | null;
   stock_qty: number | null;
   /** variable-product fields (empty on simple products) */
@@ -130,6 +163,12 @@ interface SpecificData {
   internalId?: string | null;
   price?: number | null;
   formattedPrice?: string | null;
+  /** "de" price when the product is on offer (null/absent otherwise) */
+  oldPrice?: number | null;
+  formattedOldPrice?: string | null;
+  /** discount magnitude as returned by the origin (unit not normalised here) */
+  discount?: number | null;
+  biggerDiscount?: number | null;
   units?: number | null;
   available?: boolean;
   options?: unknown[];
@@ -187,12 +226,29 @@ export async function fetchProductPage(env: Env, url: string): Promise<ScrapeRes
       accept: "text/html,application/xhtml+xml",
     },
   });
+  // Resposta que não é 2xx NÃO é produto. Antes o corpo ia direto para o parse:
+  // a página de bloqueio da origem (403) não tem __NEXT_DATA__, caía no fallback
+  // de DOM, e o <title> dela — "403: Forbidden" — virava o nome do produto na
+  // loja. O status era anotado em status_code e ninguém lia.
+  if (!res.ok) {
+    throw new Error(`origem respondeu HTTP ${res.status} — página de erro não é produto (${url})`);
+  }
   const html = await res.text();
   const result = parseProductHtml(url, html);
   result.status_code = res.status;
-  if (result.id) {
-    await enrichWithSpecificData(env, result, timeoutMs);
+
+  // Mesmo com 200: sem o produto no __NEXT_DATA__ não há o que publicar. A
+  // origem é um app Next.js — toda página real de produto traz ele. Das 97
+  // páginas que caíram no fallback de DOM, nenhuma era produto: 79 eram 403,
+  // 7 eram 404 ("Página não encontrada") e 11 vieram sem título nenhum.
+  if (!result.id) {
+    throw new Error(`página sem dados de produto (HTTP ${res.status}, título ${JSON.stringify(result.title)}) — ${url}`);
   }
+  if (looksLikeErrorPageTitle(result.title)) {
+    throw new Error(`título de página de erro: ${JSON.stringify(result.title)} — ${url}`);
+  }
+
+  await enrichWithSpecificData(env, result, timeoutMs);
   return result;
 }
 
@@ -223,27 +279,37 @@ export async function enrichWithSpecificData(
   const baseApi = `${(env.SCRAPE_BASE_URL ?? "").replace(/\/$/, "")}/api/product-specific-data`;
   if (!baseApi.startsWith("http")) return result;
 
-  // Fetch parent + variations concurrently.
+  // Parent + variations, a few at a time: a product with 30 variations used to
+  // fire 31 requests at once, which is exactly the burst the origin's WAF blocks.
   const ids = [result.id, ...result.variations.map((v) => v.id)];
-  const responses = await Promise.allSettled(
-    ids.map((id) => fetchSpecificData(baseApi, id, env, timeoutMs)),
+  const responses = await mapWithConcurrency(ids, SPECIFIC_DATA_CONCURRENCY, (id) =>
+    fetchSpecificData(baseApi, id, env, timeoutMs),
   );
 
-  const parent = responses[0];
-  if (parent.status === "fulfilled" && parent.value) {
-    applyParentSpecific(result, parent.value);
+  // All or nothing. On 01/10 the origin answered 403 to some of these calls and
+  // the scrape was saved anyway, with variations missing their code: the push
+  // then carried variations the plugin could not match, and 24 products lost
+  // theirs in the store. A failed call here fails the whole scrape, so the
+  // last good scrape stays in place and the stage retries later.
+  const failed = responses
+    .map((r, i) => (r.ok ? null : `${i === 0 ? "pai" : `variação ${ids[i]}`}: ${r.reason}`))
+    .filter((x): x is string => x !== null);
+  if (failed.length > 0) {
+    throw new Error(
+      `dados específicos da origem incompletos (${failed.length} de ${ids.length} falharam — ${failed.slice(0, 3).join("; ")})`,
+    );
   }
 
+  const parent = responses[0];
+  if (parent.ok) applyParentSpecific(result, parent.data);
   for (let i = 0; i < result.variations.length; i++) {
     const r = responses[i + 1];
-    if (r.status === "fulfilled" && r.value) {
-      applyVariationSpecific(result.variations[i], r.value);
-    }
+    if (r.ok) applyVariationSpecific(result.variations[i], r.data);
   }
 
   // Refine top-level detected_sku: simple → parent.internalId, variable → first variation
   if (result.type === "simple" && !result.detected_sku) {
-    result.detected_sku = parent.status === "fulfilled" ? parent.value?.internalId ?? null : null;
+    result.detected_sku = parent.ok ? parent.data.internalId ?? null : null;
   } else if (result.type === "variable" && result.variations.length > 0) {
     const firstWithSku = result.variations.find((v) => v.sku);
     if (firstWithSku) result.detected_sku = firstWithSku.sku;
@@ -253,25 +319,59 @@ export async function enrichWithSpecificData(
   return result;
 }
 
+const SPECIFIC_DATA_CONCURRENCY = 4;
+const SPECIFIC_DATA_ATTEMPTS = 2;
+const SPECIFIC_DATA_RETRY_MS = 1500;
+
+type SpecificFetch = { ok: true; data: SpecificData } | { ok: false; reason: string };
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 async function fetchSpecificData(
   baseApi: string,
   productId: string,
   env: Env,
   timeoutMs: number,
-): Promise<SpecificData | null> {
-  try {
-    const res = await fetchWithTimeout(`${baseApi}?productId=${encodeURIComponent(productId)}`, {
-      timeoutMs,
-      headers: {
-        accept: "application/json",
-        "user-agent": env.SCRAPE_USER_AGENT ?? "OdontoJfSync/1.0",
-      },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as SpecificData;
-  } catch {
-    return null;
+): Promise<SpecificFetch> {
+  let reason = "sem resposta";
+  for (let attempt = 1; attempt <= SPECIFIC_DATA_ATTEMPTS; attempt++) {
+    if (attempt > 1) await new Promise((r) => setTimeout(r, SPECIFIC_DATA_RETRY_MS));
+    try {
+      const res = await fetchWithTimeout(`${baseApi}?productId=${encodeURIComponent(productId)}`, {
+        timeoutMs,
+        headers: {
+          accept: "application/json",
+          "user-agent": env.SCRAPE_USER_AGENT ?? "OdontoJfSync/1.0",
+        },
+      });
+      if (!res.ok) {
+        reason = `HTTP ${res.status}`;
+        // 404 is the origin saying "no such product": asking again won't change it.
+        if (res.status === 404) break;
+        continue;
+      }
+      const data = (await res.json()) as SpecificData | null;
+      if (!data || typeof data !== "object") {
+        reason = "resposta vazia";
+        continue;
+      }
+      return { ok: true, data };
+    } catch (err) {
+      reason = err instanceof Error ? err.message : String(err);
+    }
   }
+  return { ok: false, reason };
 }
 
 function applyParentSpecific(result: ScrapeResult, sp: SpecificData): void {
@@ -279,6 +379,10 @@ function applyParentSpecific(result: ScrapeResult, sp: SpecificData): void {
   if (result.type === "simple") {
     if (typeof sp.price === "number") result.price = sp.price.toFixed(2);
     if (sp.formattedPrice) result.price_text = decodeHtmlEntities(sp.formattedPrice);
+    if (typeof sp.oldPrice === "number") result.old_price = sp.oldPrice.toFixed(2);
+    if (sp.formattedOldPrice) result.old_price_text = decodeHtmlEntities(sp.formattedOldPrice);
+    if (typeof sp.discount === "number") result.discount = sp.discount;
+    if (typeof sp.biggerDiscount === "number") result.bigger_discount = sp.biggerDiscount;
     if (typeof sp.units === "number") result.stock_qty = sp.units;
     if (sp.available === false) result.stock_status = "out_of_stock";
     else if (sp.available === true) result.stock_status = "in_stock";
@@ -289,6 +393,10 @@ function applyVariationSpecific(variation: ScrapeVariation, sp: SpecificData): v
   if (sp.internalId) variation.sku = sp.internalId;
   if (typeof sp.price === "number") variation.price = sp.price.toFixed(2);
   if (sp.formattedPrice) variation.price_text = decodeHtmlEntities(sp.formattedPrice);
+  if (typeof sp.oldPrice === "number") variation.old_price = sp.oldPrice.toFixed(2);
+  if (sp.formattedOldPrice) variation.old_price_text = decodeHtmlEntities(sp.formattedOldPrice);
+  if (typeof sp.discount === "number") variation.discount = sp.discount;
+  if (typeof sp.biggerDiscount === "number") variation.bigger_discount = sp.biggerDiscount;
   if (typeof sp.units === "number") variation.stock_qty = sp.units;
   if (sp.available === false) {
     variation.stock_status = "out_of_stock";
@@ -341,9 +449,16 @@ function parseFromNextData(
         id: opt.id,
         sku: null,
         name: decodeHtmlEntities(opt.titleInFamily ?? opt.title ?? "").trim(),
+        title: cleanText(decodeHtmlEntities(opt.title ?? "")) ?? null,
+        description: nonEmpty(opt.description) ?? null,
+        slug: nonEmpty(opt.slug) ?? null,
         provider_code: nonEmpty(opt.providerCode) ?? null,
         price: null,
         price_text: null,
+        old_price: null,
+        old_price_text: null,
+        discount: null,
+        bigger_discount: null,
         stock_status: null,
         stock_qty: null,
         barcode: nonEmpty(opt.barcode) ?? null,
@@ -354,15 +469,19 @@ function parseFromNextData(
 
   // Categories: resolve IDs via initialProps.categories lookup.
   const categories = resolveCategoryNames(initial.categories ?? [], next);
+  const category_refs = resolveCategoryRefs(initial.categories ?? [], next);
 
   return {
     url,
     slug,
     type: isVariable ? "variable" : "simple",
+    origin_type: nonEmpty(initial.type) ?? null,
     id: initial.id ?? null,
     title: cleanText(decodeHtmlEntities(initial.title ?? "")) ?? null,
     brand: cleanText(decodeHtmlEntities(initial.brand ?? "")) ?? null,
     category: categories,
+    category_refs,
+    needs_budget: typeof (initial as any).needsBudget === "boolean" ? (initial as any).needsBudget : null,
     short_description: cleanText(decodeHtmlEntities(initial.legend ?? "")) ?? null,
     description,
     description_html,
@@ -376,6 +495,10 @@ function parseFromNextData(
     dimensions: parentDimensions,
     price: null,
     price_text: null,
+    old_price: null,
+    old_price_text: null,
+    discount: null,
+    bigger_discount: null,
     installments: null,
     stock_qty: null,
     variations,
@@ -406,10 +529,13 @@ function parseFromRenderedDom(
     url,
     slug,
     type: "simple",
+    origin_type: null,
     id: null,
     title: cleanText(titleMeta),
     brand: cleanText(readMeta(meta, "product:brand") ?? readMeta(meta, "og:brand")),
     category: [],
+    category_refs: [],
+    needs_budget: null,
     short_description: null,
     description: cleanText(descMeta),
     description_html: null,
@@ -423,6 +549,10 @@ function parseFromRenderedDom(
     dimensions: { weight: null, length: null, width: null, height: null },
     price: null,
     price_text: null,
+    old_price: null,
+    old_price_text: null,
+    discount: null,
+    bigger_discount: null,
     installments: null,
     stock_qty: null,
     variations: [],
@@ -624,6 +754,38 @@ function resolveCategoryNames(ids: string[], next: any): string[] {
     .map(decodeHtmlEntities)
     .map((t) => t.trim())
     .filter(Boolean);
+}
+
+/**
+ * Category ids → [{name, slug}] for the leaf and all its origin parents.
+ * initialProps.categories = { parentCategories: [{id,title,slug}],
+ * categories: [{id,title,slug,parent:[ids]}] }.
+ */
+export function resolveCategoryRefs(ids: string[], next: any): Array<{ name: string; slug: string }> {
+  if (!ids?.length) return [];
+  const tree = next?.props?.pageProps?.initialProps?.categories;
+  const parents: any[] = Array.isArray(tree?.parentCategories) ? tree.parentCategories : [];
+  const children: any[] = Array.isArray(tree?.categories) ? tree.categories : [];
+  const byId = new Map<string, any>();
+  for (const c of [...parents, ...children]) if (c && typeof c.id === "string") byId.set(c.id, c);
+  const out: Array<{ name: string; slug: string }> = [];
+  const seen = new Set<string>();
+  const add = (c: any) => {
+    const slug = typeof c?.slug === "string" ? c.slug.trim() : "";
+    if (!slug || seen.has(slug)) return;
+    seen.add(slug);
+    out.push({ name: decodeHtmlEntities(String(c.title ?? slug)).trim(), slug });
+  };
+  for (const id of ids) {
+    const c = byId.get(id);
+    if (!c) continue;
+    add(c);
+    for (const pid of Array.isArray(c.parent) ? c.parent : []) {
+      const p = byId.get(pid);
+      if (p) add(p);
+    }
+  }
+  return out;
 }
 
 function walkCategories(node: any, out: Map<string, { title?: string; slug?: string; parentId?: string | null }>): void {

@@ -7,6 +7,8 @@ import {
   setAppState,
   getAppState,
   listPendingSyncRows,
+  markSyncRowsDispatched,
+  setWooPushedHash,
 } from "../db/repo";
 import { fetchProductSitemap } from "../scraper/sitemap";
 import { fetchProductPage } from "../scraper/product-page";
@@ -15,15 +17,23 @@ import { fetchProductFromErp } from "../erp/client";
 import { mergeScrapeAndErp, type MergedProduct } from "./merge";
 import { mirrorProductMedia, mirrorScrapedMedia } from "./media";
 import { upsertWooProduct } from "../woo/client";
+import { pushProductToPlugin, pollPluginQueue, pluginStatusToWoo, pluginPayloadHash } from "../woo/plugin-client";
 import {
   updateScrapeResult,
   updateErpResult,
   updateMergedResult,
   updateWooResult,
+  updateWooQueueResult,
+  listWooQueuePending,
 } from "../db/repo";
-import { safeJsonParse } from "../core";
+import { safeJsonParse, parseIntEnv, looksLikeErrorPageTitle, DISPATCH_GRACE_MS } from "../core";
 
 export const STAGES: SyncQueueMessage["stage"][] = ["rebuild", "scrape", "erp", "merge", "media", "push"];
+
+/** Até quando uma linha recém-despachada fica fora do dreno (15 min). */
+function dispatchGraceUntil(): string {
+  return new Date(Date.now() + DISPATCH_GRACE_MS).toISOString();
+}
 
 export async function enqueueRebuild(env: Env, opts: { reason?: string } = {}): Promise<number> {
   const id = await enqueueSyncRow(env, { stage: "rebuild", payload: opts });
@@ -38,6 +48,8 @@ export async function enqueueStage(
 ): Promise<number> {
   const id = await enqueueSyncRow(env, { stage: opts.stage, sku: opts.sku, slug: opts.slug ?? null, url: opts.url ?? null });
   await env.SYNC_QUEUE.send({ stage: opts.stage, sku: opts.sku, slug: opts.slug ?? null, url: opts.url ?? null, queue_row_id: id });
+  // Já está na fila: o dreno não deve reenviá-la enquanto ela espera a vez.
+  await markSyncRowsDispatched(env, [id], dispatchGraceUntil());
   return id;
 }
 
@@ -58,7 +70,12 @@ export async function runRebuildStage(env: Env): Promise<void> {
         sourceUrl: entry.loc,
         provisional: resolved.provisional,
       });
-      await enqueueStage(env, { stage: "scrape", sku: resolved.sku, slug: entry.slug, url: entry.loc });
+      // Só grava a linha; quem solta para a fila é o dreno do cron, no ritmo de
+      // DRAIN_BATCH_SIZE por minuto. Antes o rebuild mandava os ~3.700 scrapes
+      // direto para a fila da Cloudflare, sem freio nenhum: a origem respondia
+      // com 403 (o WAF dela se defendendo) e a loja recebia milhares de pushes
+      // por hora. Esse era o caminho por onde nasceram os "403: Forbidden".
+      await enqueueSyncRow(env, { stage: "scrape", sku: resolved.sku, slug: entry.slug, url: entry.loc });
       inserted++;
     } catch (err) {
       // Skip entries that hit constraint conflicts (e.g. shared trailing code → same SKU
@@ -89,6 +106,29 @@ function isFlagOn(value: string | undefined): boolean {
 export async function runScrapeStage(env: Env, sku: string, url: string): Promise<void> {
   try {
     const scrape = await fetchProductPage(env, url);
+
+    // Anti-duplication guard. On the origin every variation is ALSO a
+    // standalone page (`type: "familyProduct"`), and its code is the same one
+    // that already lives on a variation of the family parent here. Ingesting
+    // one would create a simple product whose SKU collides with that variation
+    // — WooCommerce enforces SKU uniqueness across products AND variations.
+    //
+    // Today the sitemap only publishes "family" and "singleProduct", so this
+    // never fires; it exists so a sitemap change or a manual
+    // POST /admin/import-urls cannot silently corrupt the catalogue.
+    if (scrape.origin_type === "familyProduct") {
+      const reason = `skipped: origin type is familyProduct (a variation of another product, code=${scrape.detected_sku ?? "?"}) — it must not become a standalone product`;
+      await updateScrapeResult(env, sku, { status: "skipped", error: reason });
+      await recordSyncEvent(env, {
+        sku,
+        stage: "scrape",
+        level: "warn",
+        message: reason,
+        context: { url, detected_sku: scrape.detected_sku },
+      });
+      return;
+    }
+
     const externalSku = scrape.detected_sku && scrape.detected_sku !== sku ? scrape.detected_sku : null;
 
     // Mirror media to R2 INSIDE the scrape stage. Strict policy: if any single
@@ -155,26 +195,88 @@ export async function runScrapeStage(env: Env, sku: string, url: string): Promis
   }
 }
 
+const ERP_DOWN_KEY = "erp_down_until";
+
+/** O ERP está em janela de "fora do ar"? */
+async function erpIsDown(env: Env): Promise<boolean> {
+  const until = await getAppState(env, ERP_DOWN_KEY);
+  if (!until) return false;
+  return Date.parse(until) > Date.now();
+}
+
+async function erpMarkDown(env: Env): Promise<void> {
+  const ttl = parseIntEnv(env.ERP_DOWN_TTL_SEC, 300);
+  await setAppState(env, ERP_DOWN_KEY, new Date(Date.now() + ttl * 1000).toISOString());
+}
+
+async function erpMarkUp(env: Env): Promise<void> {
+  const until = await getAppState(env, ERP_DOWN_KEY);
+  if (until) await setAppState(env, ERP_DOWN_KEY, "");
+}
+
+/** Falha de rede (timeout/conexão) — o ERP inteiro está fora, não é este SKU. */
+function looksLikeErpOutage(reason: string): boolean {
+  return /timeout|timed out|econn|network|socket|refused|unreach|closed/i.test(reason);
+}
+
+/** O produto pode seguir o pipeline sem o ERP? */
+function erpIsOptional(env: Env): boolean {
+  if (isFlagOn(env.ERP_OPTIONAL)) return true;
+  // Com o preço vindo da loja, o ERP não acrescenta nada ao push.
+  return (env.WOO_PUSH_PRICING ?? "erp").toLowerCase() === "store";
+}
+
 export async function runErpStage(env: Env, sku: string): Promise<void> {
   const product = await getProductBySku(env, sku);
   const lookupSku = product?.external_sku ?? sku;
+  const optional = erpIsOptional(env);
+
+  const seguir = async () => {
+    if (isFlagOn(env.AUTO_ENQUEUE_MERGE)) {
+      await enqueueStage(env, { stage: "merge", sku });
+    }
+  };
+
+  // DISJUNTOR. Com o ERP fora, cada linha pagava o timeout inteiro e o tick do
+  // cron acabava antes de drenar qualquer coisa: a fila parava de andar mesmo
+  // com scrape e merge saudáveis. Dentro da janela, nem tenta.
+  if (await erpIsDown(env)) {
+    const reason = "ERP fora do ar (disjuntor aberto) — produto segue sem dado do ERP";
+    await updateErpResult(env, sku, { status: "skipped", error: reason });
+    await recordSyncEvent(env, { sku, stage: "erp", level: "warn", message: reason });
+    await seguir();
+    return;
+  }
+
   const result = await fetchProductFromErp(env, lookupSku);
   if (result.status === "skipped") {
     await updateErpResult(env, sku, { status: "skipped", error: result.reason });
     await recordSyncEvent(env, { sku, stage: "erp", level: "warn", message: result.reason });
-    if (isFlagOn(env.AUTO_ENQUEUE_MERGE)) {
-      await enqueueStage(env, { stage: "merge", sku });
-    }
+    await seguir();
     return;
   }
   if (result.status === "failed") {
     await updateErpResult(env, sku, { status: "failed", error: result.reason });
+    if (looksLikeErpOutage(result.reason)) {
+      await erpMarkDown(env);
+      await recordSyncEvent(env, {
+        sku,
+        stage: "erp",
+        level: "error",
+        message: `ERP indisponível (${result.reason}); disjuntor aberto por ${parseIntEnv(env.ERP_DOWN_TTL_SEC, 300)}s`,
+      });
+    }
+    // Sem o ERP o produto ainda tem título, descrição e galeria da origem para
+    // publicar. Travá-lo aqui é o que deixou ~2.000 produtos parados.
+    if (optional) {
+      await seguir();
+      return;
+    }
     throw new Error(`erp fetch failed: ${result.reason}`);
   }
+  await erpMarkUp(env);
   await updateErpResult(env, sku, { status: "ok", json: result.data });
-  if (isFlagOn(env.AUTO_ENQUEUE_MERGE)) {
-    await enqueueStage(env, { stage: "merge", sku });
-  }
+  await seguir();
 }
 
 export async function runMergeStage(env: Env, sku: string): Promise<void> {
@@ -225,14 +327,199 @@ export async function runPushStage(env: Env, sku: string): Promise<void> {
   const product = await getProductBySku(env, sku);
   if (!product) throw new Error(`product not found for sku=${sku}`);
   if (!product.merged_json) throw new Error(`merged payload missing for sku=${sku}`);
+
+  // Never publish a product whose scrape is not clean — the merged payload
+  // would carry stale or partial origin data.
+  if (product.scrape_status !== "ok") {
+    const reason = `scrape not ok (status=${product.scrape_status ?? "unknown"})`;
+    await updateWooResult(env, sku, { status: "skipped", error: reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: reason });
+    return;
+  }
+  // Without ERP the price/stock would be wrong, so skip by default. The
+  // exception is WOO_PUSH_PRICING=store, where the payload carries no price at
+  // all and WooCommerce keeps its own — there is then nothing for missing ERP
+  // data to get wrong, and content can be published while the ERP is down.
+  const pricingFromStore = (env.WOO_PUSH_PRICING ?? "erp").toLowerCase() === "store";
+  if (product.erp_status === "failed" && !pricingFromStore && !isFlagOn(env.WOO_PUSH_INCLUDE_ERP_FAILED)) {
+    const reason = "erp data missing — skipped (set WOO_PUSH_INCLUDE_ERP_FAILED=1 to push anyway)";
+    await updateWooResult(env, sku, { status: "skipped", error: reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: reason });
+    return;
+  }
+
+  // O merge troca o título pelo nome do ERP: um scrape de página 404 vira um
+  // produto de nome bonito e conteúdo vazio, e passa pela trava de nome abaixo.
+  // Em 01/10 isso empurrou 7 produtos que a origem tinha tirado do ar. O scraper
+  // novo já não grava página de erro; isto cobre o que ficou no D1 de antes.
+  const scrape = safeJsonParse<{ status_code?: number; title?: string | null }>(product.scrape_json);
+  if (scrape && ((scrape.status_code ?? 200) >= 400 || looksLikeErrorPageTitle(scrape.title))) {
+    const reason = `scrape é página de erro (HTTP ${scrape.status_code ?? "?"}, título ${JSON.stringify(scrape.title ?? null)}) — push recusado`;
+    await updateWooResult(env, sku, { status: "failed", error: reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "error", message: reason });
+    return;
+  }
+
   const merged = safeJsonParse<Record<string, unknown>>(product.merged_json);
   if (!merged) throw new Error(`merged payload invalid JSON for sku=${sku}`);
   const wooSku = product.external_sku ?? sku;
-  const result = await upsertWooProduct(env, {
+
+  // Nome de página de erro (ou vazio) nunca vai para a loja. O scraper já
+  // recusa na origem; esta é a segunda barreira, para o que já estava no D1
+  // antes da correção e para qualquer regressão futura.
+  const nome = typeof merged.name === "string" ? merged.name : "";
+  const variacoesRuins = Array.isArray(merged.variations)
+    ? (merged.variations as Array<Record<string, unknown>>).filter(
+        (v) => typeof v.title === "string" && looksLikeErrorPageTitle(v.title as string),
+      ).length
+    : 0;
+  if (looksLikeErrorPageTitle(nome) || variacoesRuins > 0) {
+    const reason = variacoesRuins
+      ? `${variacoesRuins} variação(ões) com título de página de erro — push recusado`
+      : `nome de página de erro ${JSON.stringify(nome)} — push recusado`;
+    await updateWooResult(env, sku, { status: "failed", error: reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "error", message: reason });
+    return;
+  }
+
+  // Só empurra o que MUDOU — comparando o conteúdo, não a data. A guarda antiga
+  // olhava merged_updated_at, que todo merge renova: cada rebuild reempurrava o
+  // catálogo inteiro (2.243 pushes numa hora em 01/10). Também não reenvia um
+  // conteúdo que já está esperando na fila do WordPress.
+  const payloadHash = await pluginPayloadHash(env, merged, wooSku);
+  if (!isFlagOn(env.WOO_PUSH_FORCE)) {
+    const mesmoConteudo = !!product.woo_pushed_hash && product.woo_pushed_hash === payloadHash;
+    if (mesmoConteudo && (product.woo_status === "ok" || product.woo_status === "processing")) {
+      await recordSyncEvent(env, {
+        sku,
+        stage: "push",
+        level: "info",
+        message: product.woo_status === "ok"
+          ? "conteúdo idêntico ao último push — pulado"
+          : "conteúdo idêntico já está na fila do WordPress — pulado",
+      });
+      return;
+    }
+    // Legado (antes do hash existir): este merge já foi empurrado e publicado.
+    // Adota o hash e pula, em vez de reempurrar o catálogo inteiro uma vez.
+    if (
+      !product.woo_pushed_hash &&
+      product.woo_status === "ok" &&
+      product.woo_pushed_at &&
+      product.merged_updated_at &&
+      Date.parse(product.merged_updated_at) <= Date.parse(product.woo_pushed_at)
+    ) {
+      await setWooPushedHash(env, sku, payloadHash);
+      return;
+    }
+  }
+
+  const mode = (env.WOO_PUSH_MODE ?? "plugin").toLowerCase();
+  if (mode === "wcrest") {
+    await runPushViaWcRest(env, sku, wooSku, merged, product.woo_product_id);
+    return;
+  }
+  await runPushViaPlugin(env, sku, wooSku, merged, product.merged_updated_at, product.woo_product_id, payloadHash);
+}
+
+/**
+ * Default path: hand the product to the OdontoJF Woo Bridge plugin, which
+ * answers with a queue receipt and writes to WooCommerce asynchronously.
+ * The row therefore lands as `processing` + `woo_queue_id`; the terminal state
+ * arrives either from the optional poll loop below or from a later reconcile.
+ */
+async function runPushViaPlugin(
+  env: Env,
+  sku: string,
+  wooSku: string,
+  merged: Record<string, unknown>,
+  mergedUpdatedAt: string | null,
+  existingWooId: number | null,
+  payloadHash: string | null = null,
+): Promise<void> {
+  const r = await pushProductToPlugin(env, {
     sku: wooSku,
     merged,
-    existingId: product.woo_product_id,
+    mergedUpdatedAt,
+    preferUpdate: existingWooId != null,
   });
+
+  if (r.status === "skipped") {
+    await updateWooQueueResult(env, sku, { status: "skipped", error: r.reason });
+    await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: r.reason ?? "skipped" });
+    return;
+  }
+  if (r.status === "failed") {
+    await updateWooQueueResult(env, sku, { status: "failed", error: r.reason, response: r.response });
+    throw new Error(`woo plugin push failed: ${r.reason}`);
+  }
+
+  const nowTs = new Date().toISOString();
+  await updateWooQueueResult(env, sku, {
+    status: "processing",
+    queueId: r.queueId ?? null,
+    queueStatus: "pending",
+    pushedAt: nowTs,
+    response: r.response,
+    error: null,
+  });
+  // O WordPress aceitou este conteúdo na fila: é ele a referência do próximo
+  // "mudou ou não". Se o job falhar lá, o woo_status vira failed e a guarda
+  // deixa reempurrar mesmo com o hash igual.
+  if (payloadHash) await setWooPushedHash(env, sku, payloadHash);
+  await recordSyncEvent(env, {
+    sku,
+    stage: "push",
+    level: "info",
+    message: `woo enqueued on WP (queue_id=${r.queueId ?? "?"})`,
+    context: { queueId: r.queueId },
+  });
+
+  const pollMax = parseIntEnv(env.WOO_PLUGIN_POLL_MAX, 0);
+  if (pollMax > 0 && r.queueId) {
+    for (let i = 0; i < pollMax; i++) {
+      const st = await pollPluginQueue(env, r.queueId);
+      if (st && (st.status === "completed" || st.status === "passed" || st.status === "failed")) {
+        await updateWooQueueResult(env, sku, {
+          status: pluginStatusToWoo(st.status),
+          queueStatus: st.status,
+          productId: st.productId,
+          durationMs: st.durationMs,
+          error: st.status === "failed" ? pluginQueueError(st.error) : null,
+        });
+        return;
+      }
+    }
+  }
+}
+
+/** O erro da fila do plugin pode vir como objeto (WP_Error serializado). Achata
+ *  para string legível — é ele que vira a lista de revisão das recusas 409. */
+function pluginQueueError(err: unknown): string {
+  if (typeof err === "string" && err.trim() !== "") return err;
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    const code = typeof o.code === "string" ? o.code : "";
+    const msg = typeof o.message === "string" ? o.message : "";
+    if (code || msg) return code && msg ? `${code}: ${msg}` : code || msg;
+    try {
+      return JSON.stringify(err).slice(0, 500);
+    } catch {
+      /* ignore */
+    }
+  }
+  return "WP handler failed";
+}
+
+/** Legacy path (`WOO_PUSH_MODE=wcrest`): write straight to core WooCommerce. */
+async function runPushViaWcRest(
+  env: Env,
+  sku: string,
+  wooSku: string,
+  merged: Record<string, unknown>,
+  existingWooId: number | null,
+): Promise<void> {
+  const result = await upsertWooProduct(env, { sku: wooSku, merged, existingId: existingWooId });
   if (result.status === "skipped") {
     await updateWooResult(env, sku, { status: "skipped", error: result.reason });
     await recordSyncEvent(env, { sku, stage: "push", level: "warn", message: result.reason });
@@ -243,6 +530,25 @@ export async function runPushStage(env: Env, sku: string): Promise<void> {
     throw new Error(`woo push failed: ${result.reason}`);
   }
   await updateWooResult(env, sku, { status: "ok", productId: result.productId, response: result.response });
+
+  if (result.variations) {
+    const v = result.variations;
+    await recordSyncEvent(env, {
+      sku,
+      stage: "push",
+      level: v.failed > 0 ? "warn" : "info",
+      message: `woo push ok (parentId=${result.productId} created=${result.created}; variations: created=${v.created} updated=${v.updated} deleted=${v.deleted} failed=${v.failed})`,
+      context: { productId: result.productId, variations: v },
+    });
+  } else {
+    await recordSyncEvent(env, {
+      sku,
+      stage: "push",
+      level: "info",
+      message: `woo push ok (parentId=${result.productId} created=${result.created})`,
+      context: { productId: result.productId },
+    });
+  }
 }
 
 // ---- cron helpers ----
@@ -255,9 +561,39 @@ export async function shouldRebuild(env: Env): Promise<boolean> {
   return ageMs > intervalHours * 3600 * 1000;
 }
 
+/**
+ * The bridge writes to WooCommerce asynchronously, so a push that returned
+ * `queued` leaves the row as `processing`. This settles those rows by polling
+ * the plugin's queue — run from the cron so a product never gets stuck showing
+ * `processing` forever when the in-request poll loop is disabled (the default).
+ */
+export async function reconcileWooQueue(env: Env, limit: number): Promise<number> {
+  if ((env.WOO_PUSH_MODE ?? "plugin").toLowerCase() === "wcrest") return 0;
+  const rows = await listWooQueuePending(env, limit);
+  let settled = 0;
+  for (const row of rows) {
+    const st = await pollPluginQueue(env, row.woo_queue_id);
+    if (!st) continue;
+    if (st.status === "completed" || st.status === "passed" || st.status === "failed") {
+      await updateWooQueueResult(env, row.sku, {
+        status: pluginStatusToWoo(st.status),
+        queueStatus: st.status,
+        productId: st.productId,
+        durationMs: st.durationMs,
+        error: st.status === "failed" ? pluginQueueError(st.error) : null,
+      });
+      settled++;
+    } else if (st.status === "processing") {
+      await updateWooQueueResult(env, row.sku, { queueStatus: "processing" });
+    }
+  }
+  return settled;
+}
+
 export async function drainPendingToQueue(env: Env, limit: number): Promise<number> {
   const rows = await listPendingSyncRows(env, limit);
   let dispatched = 0;
+  const ids: number[] = [];
   for (const row of rows) {
     await env.SYNC_QUEUE.send({
       stage: row.stage as SyncQueueMessage["stage"],
@@ -266,7 +602,9 @@ export async function drainPendingToQueue(env: Env, limit: number): Promise<numb
       url: row.url,
       queue_row_id: row.id,
     });
+    ids.push(Number(row.id));
     dispatched++;
   }
+  await markSyncRowsDispatched(env, ids, dispatchGraceUntil());
   return dispatched;
 }

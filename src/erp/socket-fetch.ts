@@ -1,4 +1,5 @@
 import { connect } from "cloudflare:sockets";
+import { decodeBody } from "./decode";
 
 /**
  * Manual HTTP/1.1 over a raw TCP socket.
@@ -159,13 +160,7 @@ function parseHttpResponse(buf: Uint8Array): SocketFetchResponse {
   }
 
   const bodyBytes = buf.subarray(sep + sepLen);
-  // Best-effort decode. ERP returns ISO-8859-1 sometimes; try UTF-8 first.
-  let body = "";
-  try {
-    body = new TextDecoder("utf-8").decode(bodyBytes);
-  } catch {
-    body = new TextDecoder("iso-8859-1").decode(bodyBytes);
-  }
+  const body = decodeBody(bodyBytes);
 
   return {
     status,

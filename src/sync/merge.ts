@@ -25,8 +25,8 @@ import type { ScrapeImage, ScrapeResult, ScrapeVariation } from "../scraper/prod
  *   - provider_code          → ERP `fornecedorReferenciaCodigo` → scraper.
  *   - brand                  → ERP `marca` → scraper. Sent both as a Woo
  *                              attribute "Marca" and as meta `_odontojf_brand`.
- *   - categories             → ERP hierarchy (categoria > subCategoria > grupo
- *                              > subGrupo) when available; scraper as fallback.
+ *   - categories             → origin store only (scraper `category_refs`, by
+ *                              slug: leaf + its origin parents). Never the ERP.
  *   - attributes             → ERP `atributos[]` (custom attribute=value),
  *                              "Marca", and (variable) the variation axis.
  *   - variations             → built from scraper.variations (loja é a fonte
@@ -69,9 +69,18 @@ export interface MergedVariation {
   sku: string | null;
   /** Variation label as shown on the storefront (e.g. "A1", "DB-A3,5"). */
   name: string;
+  /** The child's own product title on the origin (e.g. "Fórceps Adulto N°150").
+   *  WooCommerce has no native per-variation title, so the bridge stores this
+   *  as meta and the storefront renders it. */
+  title: string | null;
+  /** The child's own description. Written to the variation's NATIVE
+   *  WooCommerce description field by the bridge. */
+  description: string | null;
   provider_code: string | null;
   barcode: string | null;
   regular_price: string | null;
+  /** offer price ("por"). Null unless this variation is on offer. */
+  sale_price: string | null;
   manage_stock: boolean;
   stock_quantity: number | null;
   stock_status: "instock" | "outofstock" | null;
@@ -79,8 +88,12 @@ export interface MergedVariation {
   weight: string | null;
   /** Woo native: { length, width, height } in cm, all strings. */
   dimensions: { length: string; width: string; height: string };
-  /** Single image for the variation. Empty `src` means "use parent image". */
+  /** Single image for the variation — kept as the variation thumbnail and for
+   *  backwards compatibility with consumers that only understand one image. */
   image: { src: string } | null;
+  /** Full per-variation gallery, in origin order. `image` above is images[0].
+   *  Empty when the origin gave this variation no image of its own. */
+  images: Array<{ src: string }>;
   /** Variation attributes — only the variation axis (e.g. {Variação: "A1"}). */
   attributes: Array<{ name: string; option: string }>;
   meta_data: Array<{ key: string; value: string }>;
@@ -95,8 +108,10 @@ export interface MergedProduct {
   description: string | null;
   short_description: string | null;
   brand: string | null;
-  /** Woo categories — ordered from broader to narrower when ERP exposes a hierarchy. */
-  categories: Array<{ name: string }>;
+  /** Origin store categories: leaf + its origin parents, with slugs when known. */
+  categories: Array<{ name: string; slug?: string }>;
+  /** Origin asks for a quote instead of selling ("Solicitar orçamento"). */
+  needs_budget: boolean | null;
   images: Array<{ src: string }>;
   regular_price: string | null;
   sale_price: string | null;
@@ -128,6 +143,18 @@ function asString(v: unknown): string | null {
   if (typeof v === "string") return v.trim() || null;
   if (typeof v === "number") return String(v);
   return null;
+}
+
+/**
+ * Text from the ERP. NBSP (the ERP pads with it) becomes a plain space. Text
+ * that still carries U+FFFD was decoded wrong upstream and is lost — returns
+ * null so the caller falls back to the origin's copy instead of publishing "�".
+ */
+export function erpText(v: unknown): string | null {
+  const s = asString(v);
+  if (s == null) return null;
+  if (s.includes("\uFFFD")) return null;
+  return s.replace(/\u00A0/g, " ").replace(/[ \t]{2,}/g, " ").trim() || null;
 }
 
 function asNumber(v: unknown): number | null {
@@ -183,36 +210,14 @@ function pickFirstImage(images: ScrapeImage[] | undefined, fallback: ScrapeImage
   return src ? { src } : null;
 }
 
-function buildErpCategoryHierarchy(erp: any): Array<{ name: string }> | null {
-  const names: string[] = [];
-  // Order: linha → grupoWeb → grupo → subGrupo → categoria → subCategoria.
-  // The first 4 are taxonomic context; the last 2 are the leaf categorisation.
-  // We push from broad to narrow so Woo can mirror the breadcrumb structure.
-  const fields = ["linha", "grupoWeb", "grupo", "subGrupo", "categoria", "subCategoria"];
-  for (const f of fields) {
-    const obj = pickFromErp(erp, [f]);
-    if (obj && typeof obj === "object") {
-      const desc = asString((obj as any).descricao ?? (obj as any).Descricao ?? (obj as any).nome);
-      if (desc) names.push(desc);
-    }
-  }
-  if (names.length === 0) return null;
-  // dedupe consecutive duplicates while preserving order
-  const out: string[] = [];
-  for (const n of names) {
-    if (out[out.length - 1] !== n) out.push(n);
-  }
-  return out.map((n) => ({ name: n }));
-}
-
 function buildErpAttributes(erp: any): MergedAttribute[] {
   const list = pickFromErp(erp, ["atributos"]);
   if (!Array.isArray(list)) return [];
   const out: MergedAttribute[] = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
-    const name = asString((item as any).atributo ?? (item as any).nome);
-    const value = asString((item as any).valorAtributo ?? (item as any).valor);
+    const name = erpText((item as any).atributo ?? (item as any).nome);
+    const value = erpText((item as any).valorAtributo ?? (item as any).valor);
     if (!name || !value) continue;
     out.push({ name, options: [value], variation: false, visible: true });
   }
@@ -251,17 +256,17 @@ export function mergeScrapeAndErp(input: {
     erpAtivo === false ? "draft" : erpAtivo === true ? "publish" : null;
 
   // ---------- copy from ERP, fall back to scraper ----------
-  const erpName = asString(pickFromErp(erp, ["descricao", "Descricao", "name", "title"]));
-  const erpLongDescription = asString(
+  const erpName = erpText(pickFromErp(erp, ["descricao", "Descricao", "name", "title"]));
+  const erpLongDescription = erpText(
     pickFromErp(erp, ["descricaoDetalhada", "descricao_detalhada", "descricao_longa", "DescricaoCompleta", "long_description"]),
   );
-  const erpShortDescription = asString(
+  const erpShortDescription = erpText(
     pickFromErp(erp, ["descricaoComplementar", "descricao_complementar", "descricao_curta", "short_description"]),
   );
   const erpPrice = asNumber(pickFromErp(erp, ["preco", "valor", "preco_venda", "PrecoVenda", "price"]));
   const erpSalePrice = asNumber(pickFromErp(erp, ["precoPromocional", "preco_promocional", "sale_price"]));
   const erpStockQty = asNumber(pickFromErp(erp, ["estoque", "quantidade", "saldo", "Estoque", "stock_quantity"]));
-  const erpBrand = asString(pickFromErp(erp, ["marca", "Marca", "brand"]));
+  const erpBrand = erpText(pickFromErp(erp, ["marca", "Marca", "brand"]));
   const erpProvider = asString(
     pickFromErp(erp, ["fornecedorReferenciaCodigo", "codigo_fornecedor", "providerCode", "provider_code"]),
   );
@@ -273,10 +278,15 @@ export function mergeScrapeAndErp(input: {
   const erpComprimento = asNumber(pickFromErp(erp, ["comprimento", "Comprimento", "length"]));
 
   // ---------- categories ----------
-  const erpCategories = buildErpCategoryHierarchy(erp);
-  const categories: Array<{ name: string }> =
-    erpCategories
-    ?? (scrape?.category ?? []).map((name) => ({ name }));
+  // Only the origin store's categories, by slug — never the ERP's. The ERP
+  // hierarchy (linha > grupoWeb > grupo > ...) turned into thousands of junk
+  // categories in Woo ("ODONTOLOGICO > PRODUTO ODONTOLOGICO A > VIPI"), and
+  // matching by name created "-2" twins. The plugin only assigns categories it
+  // finds by slug in the store's tree; it never creates one.
+  const categories: Array<{ name: string; slug?: string }> =
+    scrape?.category_refs?.length
+      ? scrape.category_refs.map((c) => ({ name: c.name, slug: c.slug }))
+      : (scrape?.category ?? []).map((name) => ({ name }));
 
   // ---------- variations (built from scraper) ----------
   const scrapeVars = scrape?.variations ?? [];
@@ -303,11 +313,33 @@ export function mergeScrapeAndErp(input: {
       width: fbDim(vDims.width, parentDimsRaw.width),
       height: fbDim(vDims.height, parentDimsRaw.height),
     };
+    // Keep the whole gallery. `image` stays the first one so nothing that only
+    // understands a single image regresses.
+    const gallery = (v.images ?? []).filter((i) => i?.src).map((i) => ({ src: i.src }));
     const image = pickFirstImage(v.images, parentImages);
     const variationMeta: Array<{ key: string; value: string }> = [];
     if (v.barcode) variationMeta.push({ key: "_odontojf_barcode", value: v.barcode });
     if (v.provider_code) variationMeta.push({ key: "_odontojf_provider_code", value: v.provider_code });
     if (v.id) variationMeta.push({ key: "_odontojf_scrape_id", value: v.id });
+    if (v.title) variationMeta.push({ key: "_odontojf_variation_title", value: v.title });
+    if (v.slug) variationMeta.push({ key: "_odontojf_variation_slug", value: v.slug });
+
+    // Offer ("de/por"): mirror the origin. regular = oldPrice, sale = current price.
+    // ERP has no per-variation price here, so the plugin reconciles each variation
+    // against the live ERP price at cart time (same rule as the parent below).
+    const vCur = v.price != null ? Number(v.price) : null;
+    const vOld = v.old_price != null ? Number(v.old_price) : null;
+    const vDiscount = typeof v.discount === "number" ? v.discount : null;
+    const vHasOffer =
+      (vDiscount != null && vDiscount > 0) ||
+      (vOld != null && vCur != null && vOld > vCur);
+    const vRegularNum = vHasOffer && vOld != null ? vOld : vCur;
+    const vSaleNum =
+      vHasOffer && vCur != null && vRegularNum != null && vCur < vRegularNum ? vCur : null;
+    if (vHasOffer && v.old_price_text)
+      variationMeta.push({ key: "_odontojf_old_price_text", value: v.old_price_text });
+    if (vHasOffer && vDiscount != null && vDiscount > 0)
+      variationMeta.push({ key: "_odontojf_discount", value: String(vDiscount) });
 
     return {
       scrape_id: v.id,
@@ -315,7 +347,8 @@ export function mergeScrapeAndErp(input: {
       name: v.name,
       provider_code: v.provider_code ?? null,
       barcode: v.barcode ?? null,
-      regular_price: v.price,
+      regular_price: vRegularNum != null ? vRegularNum.toFixed(2) : v.price,
+      sale_price: vSaleNum != null ? vSaleNum.toFixed(2) : null,
       manage_stock: v.stock_qty != null,
       stock_quantity: v.stock_qty,
       stock_status:
@@ -331,6 +364,9 @@ export function mergeScrapeAndErp(input: {
         height: dimToStr(dims.height) ?? "",
       },
       image,
+      images: gallery,
+      title: v.title ?? null,
+      description: v.description ?? null,
       attributes: [{ name: variationAxisName, option: v.name }],
       meta_data: variationMeta,
     };
@@ -368,10 +404,38 @@ export function mergeScrapeAndErp(input: {
   );
   const scrapeStockQty = isVariable ? (variationStockTotal || null) : (scrape?.stock_qty ?? null);
 
-  const regularPriceNum = erpPrice ?? (scrape?.price != null ? Number(scrape.price) : null) ?? null;
-  const regular_price = regularPriceNum != null ? regularPriceNum.toFixed(2)
-    : minVariationPrice;
-  const sale_price = erpSalePrice && erpSalePrice > 0 ? erpSalePrice.toFixed(2) : null;
+  // ---------- offer-aware price (parent / simple) ----------
+  // When the origin has an active offer, mirror its "de/por": regular = origin
+  // oldPrice, sale = the effective current price. The effective price reconciles
+  // against the ERP (the live source of truth): ERP >= regular ⇒ drop the sale;
+  // ERP < regular ⇒ the sale becomes the ERP price. Without an origin offer, ERP
+  // stays the regular price and precoPromocional is the only sale source (legacy).
+  const scrapePriceNum = scrape?.price != null ? Number(scrape.price) : null;
+  const scrapeOldNum = scrape?.old_price != null ? Number(scrape.old_price) : null;
+  const scrapeDiscount = typeof scrape?.discount === "number" ? scrape.discount : null;
+  const parentHasOffer =
+    (scrapeDiscount != null && scrapeDiscount > 0) ||
+    (scrapeOldNum != null && scrapePriceNum != null && scrapeOldNum > scrapePriceNum);
+
+  const regularPriceNum =
+    parentHasOffer && scrapeOldNum != null ? scrapeOldNum : (erpPrice ?? scrapePriceNum);
+  const regular_price =
+    regularPriceNum != null ? regularPriceNum.toFixed(2) : minVariationPrice;
+
+  const effectivePriceNum = erpPrice ?? scrapePriceNum;
+  let saleNum: number | null = null;
+  if (parentHasOffer) {
+    if (effectivePriceNum != null && regularPriceNum != null && effectivePriceNum < regularPriceNum) {
+      saleNum = effectivePriceNum;
+    } else if (effectivePriceNum != null && regularPriceNum != null) {
+      warnings.push(
+        `offer present but effective price ${effectivePriceNum} not below regular ${regularPriceNum}; sale dropped`,
+      );
+    }
+  } else if (erpSalePrice && erpSalePrice > 0 && regularPriceNum != null && erpSalePrice < regularPriceNum) {
+    saleNum = erpSalePrice;
+  }
+  const sale_price = saleNum != null ? saleNum.toFixed(2) : null;
 
   const stockQuantity = erpStockQty ?? scrapeStockQty;
   const stockStatus: "instock" | "outofstock" | null = (() => {
@@ -418,6 +482,8 @@ export function mergeScrapeAndErp(input: {
   const barcode = erpBarcode ?? scrape?.barcode ?? null;
   if (barcode) meta_data.push({ key: "_odontojf_barcode", value: barcode });
   if (scrape?.installments) meta_data.push({ key: "_odontojf_installments", value: scrape.installments });
+  if (parentHasOffer && scrape?.old_price_text) meta_data.push({ key: "_odontojf_old_price_text", value: scrape.old_price_text });
+  if (parentHasOffer && scrapeDiscount != null && scrapeDiscount > 0) meta_data.push({ key: "_odontojf_discount", value: String(scrapeDiscount) });
   for (const v of scrape?.video_urls ?? []) meta_data.push({ key: "_odontojf_video_url", value: v });
   for (const p of scrape?.pdf_urls ?? []) meta_data.push({ key: "_odontojf_pdf_url", value: p.url });
 
@@ -442,6 +508,7 @@ export function mergeScrapeAndErp(input: {
     short_description,
     brand: brandFinal,
     categories,
+    needs_budget: scrape?.needs_budget ?? null,
     images: parentImages.map((img) => ({ src: img.src })),
     regular_price,
     sale_price,
