@@ -2,13 +2,15 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.78
+ * Version: 1.0.79
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.79 - 301 para 2 links do menu que ja estavam quebrados (Moldagem e Modelo,
+ *          Cadeira Odontologica "-consultorio-odontologico-2").
  *  1.0.78 - Categoria Orcamento vai para o 1o nivel (era filha de Cadeira
  *          Odontologica e a bomba de vacuo aparecia entre as cadeiras).
  *  1.0.77 - Produto na categoria Orcamento: no grid (listagem JetEngine com o
@@ -341,7 +343,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.78');
+define('OJF_BRIDGE_VERSION', '1.0.79');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
