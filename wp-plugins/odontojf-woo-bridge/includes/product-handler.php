@@ -748,22 +748,11 @@ function ojf_apply_product_fields($product, $data) {
         if (!empty($d['height'])) $product->set_height((string) $d['height']);
     }
 
-    // categories — HIERÁRQUICAS: o array vem como breadcrumb [raiz, ..., folha].
-    // Cada nível é criado como FILHO do anterior (Dentística e Estética → Adesivo),
-    // não flat. O produto é atribuído a todo o caminho.
-    $ids = [];
-    if (!empty($data['categories']) && is_array($data['categories'])) {
-        $parent = 0;
-        foreach ($data['categories'] as $cat) {
-            $cname = is_array($cat) ? ($cat['name'] ?? '') : (string) $cat;
-            $cid = ojf_get_or_create_category_id($cname, $parent);
-            if ($cid) { $ids[] = $cid; $parent = $cid; }
-        }
-    }
-    // Categorias vêm SÓ do breadcrumb que o worker manda. (Orçamento NÃO é mais
-    // adicionado em todo produto — agora é só nos que vierem na categoria certa,
-    // ex: OLSEN/Cadeira Odontológica. Quem decide é o worker, pela categoria.)
-    if ($ids) $product->set_category_ids(array_values(array_unique($ids)));
+    // Categorias: só MARCA as que já existem na árvore da loja, achadas pelo slug
+    // da origem; nunca cria (>= 1.0.74, categories.php). O breadcrumb por nome
+    // criava um termo a cada nível que não achava no pai — daí os "-2" e as
+    // árvores do ERP. Orçamento segue o needs_budget da origem.
+    ojf_apply_payload_categories($product, $data);
 
     // manual attributes
     $attrs = ojf_build_manual_attributes($data['attributes'] ?? []);

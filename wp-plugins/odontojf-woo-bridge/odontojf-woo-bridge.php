@@ -2,13 +2,21 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.73
+ * Version: 1.0.74
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.74 - CATEGORIAS = AS DA ORIGEM. O push so MARCA: cada categoria do
+ *          payload e procurada pelo slug da origem dentro da arvore "Loja";
+ *          nao achou = ignora; nunca cria (era o breadcrumb por nome que criava
+ *          os "-2" e as arvores do ERP). needs_budget da origem -> Orcamento.
+ *          Lote unico (data/category-fix.json): corrige pai/nome das categorias
+ *          da origem, remarca os produtos, apaga o que sobrou vazio fora da
+ *          arvore (religa item de menu ao equivalente; sem equivalente, fica).
+ *          URL antiga "-2" -> 301 para a categoria certa.
  *  1.0.73 - Lote titulo+marca se encadeia sozinho (admin-ajax interno nao
  *          bloqueante, 15s entre lotes, uma corrente so). Carona em requisicao
  *          dava 2,5 produtos/min: quase tudo sai do cache sem tocar o PHP.
@@ -318,7 +326,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.73');
+define('OJF_BRIDGE_VERSION', '1.0.74');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
@@ -331,6 +339,7 @@ require_once OJF_BRIDGE_DIR . 'includes/erp-client.php';      // cliente ERP (lo
 require_once OJF_BRIDGE_DIR . 'includes/product-log.php';     // log ERP + histórico de preços (custom field + metabox)
 require_once OJF_BRIDGE_DIR . 'includes/image-handler.php';   // fila de imagens + R2 (verbatim)
 require_once OJF_BRIDGE_DIR . 'includes/product-handler.php'; // handlers + rotas (atributo manual, _sku=ERP)
+require_once OJF_BRIDGE_DIR . 'includes/categories.php';      // categorias = as da origem, por slug; nunca cria + limpeza
 require_once OJF_BRIDGE_DIR . 'includes/title-brand.php';     // "Nome - MARCA" no título (push + lote dos existentes)
 require_once OJF_BRIDGE_DIR . 'includes/cart-erp.php';        // preço/estoque ao vivo no carrinho
 require_once OJF_BRIDGE_DIR . 'includes/video.php';          // shortcode [ojf_video] (vídeo via custom field)

@@ -25,8 +25,8 @@ import type { ScrapeImage, ScrapeResult, ScrapeVariation } from "../scraper/prod
  *   - provider_code          → ERP `fornecedorReferenciaCodigo` → scraper.
  *   - brand                  → ERP `marca` → scraper. Sent both as a Woo
  *                              attribute "Marca" and as meta `_odontojf_brand`.
- *   - categories             → ERP hierarchy (categoria > subCategoria > grupo
- *                              > subGrupo) when available; scraper as fallback.
+ *   - categories             → origin store only (scraper `category_refs`, by
+ *                              slug: leaf + its origin parents). Never the ERP.
  *   - attributes             → ERP `atributos[]` (custom attribute=value),
  *                              "Marca", and (variable) the variation axis.
  *   - variations             → built from scraper.variations (loja é a fonte
@@ -108,8 +108,10 @@ export interface MergedProduct {
   description: string | null;
   short_description: string | null;
   brand: string | null;
-  /** Woo categories — ordered from broader to narrower when ERP exposes a hierarchy. */
-  categories: Array<{ name: string }>;
+  /** Origin store categories: leaf + its origin parents, with slugs when known. */
+  categories: Array<{ name: string; slug?: string }>;
+  /** Origin asks for a quote instead of selling ("Solicitar orçamento"). */
+  needs_budget: boolean | null;
   images: Array<{ src: string }>;
   regular_price: string | null;
   sale_price: string | null;
@@ -196,28 +198,6 @@ function pickFirstImage(images: ScrapeImage[] | undefined, fallback: ScrapeImage
   return src ? { src } : null;
 }
 
-function buildErpCategoryHierarchy(erp: any): Array<{ name: string }> | null {
-  const names: string[] = [];
-  // Order: linha → grupoWeb → grupo → subGrupo → categoria → subCategoria.
-  // The first 4 are taxonomic context; the last 2 are the leaf categorisation.
-  // We push from broad to narrow so Woo can mirror the breadcrumb structure.
-  const fields = ["linha", "grupoWeb", "grupo", "subGrupo", "categoria", "subCategoria"];
-  for (const f of fields) {
-    const obj = pickFromErp(erp, [f]);
-    if (obj && typeof obj === "object") {
-      const desc = asString((obj as any).descricao ?? (obj as any).Descricao ?? (obj as any).nome);
-      if (desc) names.push(desc);
-    }
-  }
-  if (names.length === 0) return null;
-  // dedupe consecutive duplicates while preserving order
-  const out: string[] = [];
-  for (const n of names) {
-    if (out[out.length - 1] !== n) out.push(n);
-  }
-  return out.map((n) => ({ name: n }));
-}
-
 function buildErpAttributes(erp: any): MergedAttribute[] {
   const list = pickFromErp(erp, ["atributos"]);
   if (!Array.isArray(list)) return [];
@@ -286,10 +266,15 @@ export function mergeScrapeAndErp(input: {
   const erpComprimento = asNumber(pickFromErp(erp, ["comprimento", "Comprimento", "length"]));
 
   // ---------- categories ----------
-  const erpCategories = buildErpCategoryHierarchy(erp);
-  const categories: Array<{ name: string }> =
-    erpCategories
-    ?? (scrape?.category ?? []).map((name) => ({ name }));
+  // Only the origin store's categories, by slug — never the ERP's. The ERP
+  // hierarchy (linha > grupoWeb > grupo > ...) turned into thousands of junk
+  // categories in Woo ("ODONTOLOGICO > PRODUTO ODONTOLOGICO A > VIPI"), and
+  // matching by name created "-2" twins. The plugin only assigns categories it
+  // finds by slug in the store's tree; it never creates one.
+  const categories: Array<{ name: string; slug?: string }> =
+    scrape?.category_refs?.length
+      ? scrape.category_refs.map((c) => ({ name: c.name, slug: c.slug }))
+      : (scrape?.category ?? []).map((name) => ({ name }));
 
   // ---------- variations (built from scraper) ----------
   const scrapeVars = scrape?.variations ?? [];
@@ -511,6 +496,7 @@ export function mergeScrapeAndErp(input: {
     short_description,
     brand: brandFinal,
     categories,
+    needs_budget: scrape?.needs_budget ?? null,
     images: parentImages.map((img) => ({ src: img.src })),
     regular_price,
     sale_price,

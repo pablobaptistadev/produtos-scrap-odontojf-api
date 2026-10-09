@@ -138,6 +138,7 @@ export function buildPluginPayload(
 
   if (Array.isArray(merged.attributes)) body.attributes = merged.attributes;
   if (Array.isArray(merged.categories)) body.categories = merged.categories;
+  if (typeof merged.needs_budget === "boolean") body.needs_budget = merged.needs_budget;
   if (Array.isArray(merged.images)) body.images = merged.images;
   if (Array.isArray(merged.meta_data)) body.meta_data = merged.meta_data;
 

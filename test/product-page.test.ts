@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseProductHtml } from "../src/scraper/product-page";
+import { parseProductHtml, resolveCategoryRefs } from "../src/scraper/product-page";
 
 const fixturesDir = join(__dirname, "fixtures");
 function loadFixture(name: string): string {
@@ -157,5 +157,46 @@ describe("parseProductHtml — variable product (Resina Elora APS - 4g)", () => 
     expect(result.price).toBeNull();
     expect(result.price_text).toBeNull();
     expect(result.stock_qty).toBeNull();
+  });
+});
+
+describe("resolveCategoryRefs — categorias da origem por slug", () => {
+  const next = {
+    props: {
+      pageProps: {
+        initialProps: {
+          categories: {
+            parentCategories: [
+              { id: "P1", title: "Consultório Odontológico ", slug: "consultorio-odontologico" },
+              { id: "P2", title: "Cimentos", slug: "cimentos" },
+              { id: "P3", title: "Dentística e Estética", slug: "dentistica-e-estetica" },
+            ],
+            categories: [
+              { id: "C1", title: "Cadeira Odontológica ", slug: "cadeira-odontologica", parent: ["P1"] },
+              { id: "C2", title: "Restaurador Provisório", slug: "restaurador-provisorio", parent: ["P2", "P3"] },
+            ],
+          },
+        },
+      },
+    },
+  };
+
+  it("folha + pai, com slug e nome sem espaço sobrando", () => {
+    expect(resolveCategoryRefs(["C1"], next)).toEqual([
+      { name: "Cadeira Odontológica", slug: "cadeira-odontologica" },
+      { name: "Consultório Odontológico", slug: "consultorio-odontologico" },
+    ]);
+  });
+
+  it("categoria com mais de um pai leva todos (a origem mostra o produto nos dois)", () => {
+    expect(resolveCategoryRefs(["C2"], next).map((c) => c.slug)).toEqual([
+      "restaurador-provisorio", "cimentos", "dentistica-e-estetica",
+    ]);
+  });
+
+  it("sem repetir e ignorando id desconhecido", () => {
+    expect(resolveCategoryRefs(["C1", "C1", "XX"], next).map((c) => c.slug)).toEqual([
+      "cadeira-odontologica", "consultorio-odontologico",
+    ]);
   });
 });

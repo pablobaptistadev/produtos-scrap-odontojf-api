@@ -117,30 +117,47 @@ describe("mergeScrapeAndErp — weight & dimensions", () => {
 });
 
 describe("mergeScrapeAndErp — categories", () => {
-  it("prefers ERP hierarchical categories over the scraped string", () => {
+  const erpComHierarquia = {
+    codigo: "SKU-C",
+    linha: { codigo: 12, descricao: "ODONTOLOGICO" },
+    grupoWeb: { codigo: 1, descricao: "PRODUTO ODONTOLOGICO A" },
+    categoria: { codigo: 4, descricao: "PRODUTO ODONTOLOGICO" },
+    subCategoria: { codigo: 1, descricao: "VIPI" },
+  };
+
+  it("never uses the ERP hierarchy — it became junk categories in the store", () => {
     const merged = mergeScrapeAndErp({
       sku: "SKU-C",
-      scrape: { ...baseScrape, category: ["Resina"] },
-      erp: {
-        codigo: "SKU-C",
-        linha: { codigo: 12, descricao: "Restauradores" },
-        grupoWeb: { codigo: 1, descricao: "Resina Composta" },
-        categoria: { codigo: 4, descricao: "Resina Estética" },
-        subCategoria: { codigo: 1, descricao: "APS" },
+      scrape: {
+        ...baseScrape,
+        category: ["Cadeira Odontológica"],
+        category_refs: [
+          { name: "Cadeira Odontológica", slug: "cadeira-odontologica" },
+          { name: "Consultório Odontológico", slug: "consultorio-odontologico" },
+        ],
       },
+      erp: erpComHierarquia,
     });
-    expect(merged.categories.map((c) => c.name)).toEqual([
-      "Restauradores", "Resina Composta", "Resina Estética", "APS",
+    expect(merged.categories).toEqual([
+      { name: "Cadeira Odontológica", slug: "cadeira-odontologica" },
+      { name: "Consultório Odontológico", slug: "consultorio-odontologico" },
     ]);
   });
 
-  it("falls back to scraped categories when ERP omits the hierarchy", () => {
+  it("old scrapes without slugs still send the origin names (the plugin ignores them)", () => {
     const merged = mergeScrapeAndErp({
       sku: "SKU-C2",
       scrape: { ...baseScrape, category: ["Pistola Dispensadora"] },
-      erp: null,
+      erp: erpComHierarquia,
     });
     expect(merged.categories).toEqual([{ name: "Pistola Dispensadora" }]);
+  });
+
+  it("carries the origin's needsBudget", () => {
+    const sim = mergeScrapeAndErp({ sku: "S1", scrape: { ...baseScrape, needs_budget: true }, erp: null });
+    const nao = mergeScrapeAndErp({ sku: "S2", scrape: { ...baseScrape, needs_budget: false }, erp: null });
+    const velho = mergeScrapeAndErp({ sku: "S3", scrape: { ...baseScrape }, erp: null });
+    expect([sim.needs_budget, nao.needs_budget, velho.needs_budget]).toEqual([true, false, null]);
   });
 });
 

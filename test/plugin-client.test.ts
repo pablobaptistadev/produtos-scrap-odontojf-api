@@ -124,3 +124,26 @@ describe("pluginPayloadHash — decide se um produto precisa ser reempurrado", (
     expect(await pluginPayloadHash(env, base, "OD-411")).not.toBe(await pluginPayloadHash(env, outra, "OD-411"));
   });
 });
+
+describe("buildPluginPayload — categorias da origem e orçamento", () => {
+  const base = { name: "Consultório Logic Exclusive II", type: "simple", regular_price: null, images: [], variations: [] };
+
+  it("manda as categorias com slug e o needs_budget", () => {
+    const body = buildPluginPayload(
+      {
+        ...base,
+        categories: [{ name: "Cadeira Odontológica", slug: "cadeira-odontologica" }],
+        needs_budget: true,
+      } as any,
+      "cadeira1",
+      { skipPricing: true },
+    );
+    expect(body.categories).toEqual([{ name: "Cadeira Odontológica", slug: "cadeira-odontologica" }]);
+    expect(body.needs_budget).toBe(true);
+  });
+
+  it("sem dado da origem não manda needs_budget (o plugin não mexe em Orçamento)", () => {
+    const body = buildPluginPayload({ ...base, needs_budget: null } as any, "x", { skipPricing: true });
+    expect("needs_budget" in body).toBe(false);
+  });
+});

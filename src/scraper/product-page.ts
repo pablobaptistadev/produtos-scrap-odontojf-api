@@ -93,6 +93,15 @@ export interface ScrapeResult {
   title: string | null;
   brand: string | null;
   category: string[];
+  /**
+   * The product's categories as the origin store has them, by SLUG: each leaf
+   * category plus every parent the origin lists for it (a category can sit
+   * under more than one). This is what the plugin matches against — names are
+   * ambiguous and the ERP's are not the store's.
+   */
+  category_refs: Array<{ name: string; slug: string }>;
+  /** The origin shows "Solicitar orçamento" instead of a price (initialData.needsBudget). */
+  needs_budget: boolean | null;
   short_description: string | null;
   description: string | null;
   description_html: string | null;
@@ -460,6 +469,7 @@ function parseFromNextData(
 
   // Categories: resolve IDs via initialProps.categories lookup.
   const categories = resolveCategoryNames(initial.categories ?? [], next);
+  const category_refs = resolveCategoryRefs(initial.categories ?? [], next);
 
   return {
     url,
@@ -470,6 +480,8 @@ function parseFromNextData(
     title: cleanText(decodeHtmlEntities(initial.title ?? "")) ?? null,
     brand: cleanText(decodeHtmlEntities(initial.brand ?? "")) ?? null,
     category: categories,
+    category_refs,
+    needs_budget: typeof (initial as any).needsBudget === "boolean" ? (initial as any).needsBudget : null,
     short_description: cleanText(decodeHtmlEntities(initial.legend ?? "")) ?? null,
     description,
     description_html,
@@ -522,6 +534,8 @@ function parseFromRenderedDom(
     title: cleanText(titleMeta),
     brand: cleanText(readMeta(meta, "product:brand") ?? readMeta(meta, "og:brand")),
     category: [],
+    category_refs: [],
+    needs_budget: null,
     short_description: null,
     description: cleanText(descMeta),
     description_html: null,
@@ -740,6 +754,38 @@ function resolveCategoryNames(ids: string[], next: any): string[] {
     .map(decodeHtmlEntities)
     .map((t) => t.trim())
     .filter(Boolean);
+}
+
+/**
+ * Category ids → [{name, slug}] for the leaf and all its origin parents.
+ * initialProps.categories = { parentCategories: [{id,title,slug}],
+ * categories: [{id,title,slug,parent:[ids]}] }.
+ */
+export function resolveCategoryRefs(ids: string[], next: any): Array<{ name: string; slug: string }> {
+  if (!ids?.length) return [];
+  const tree = next?.props?.pageProps?.initialProps?.categories;
+  const parents: any[] = Array.isArray(tree?.parentCategories) ? tree.parentCategories : [];
+  const children: any[] = Array.isArray(tree?.categories) ? tree.categories : [];
+  const byId = new Map<string, any>();
+  for (const c of [...parents, ...children]) if (c && typeof c.id === "string") byId.set(c.id, c);
+  const out: Array<{ name: string; slug: string }> = [];
+  const seen = new Set<string>();
+  const add = (c: any) => {
+    const slug = typeof c?.slug === "string" ? c.slug.trim() : "";
+    if (!slug || seen.has(slug)) return;
+    seen.add(slug);
+    out.push({ name: decodeHtmlEntities(String(c.title ?? slug)).trim(), slug });
+  };
+  for (const id of ids) {
+    const c = byId.get(id);
+    if (!c) continue;
+    add(c);
+    for (const pid of Array.isArray(c.parent) ? c.parent : []) {
+      const p = byId.get(pid);
+      if (p) add(p);
+    }
+  }
+  return out;
 }
 
 function walkCategories(node: any, out: Map<string, { title?: string; slug?: string; parentId?: string | null }>): void {
