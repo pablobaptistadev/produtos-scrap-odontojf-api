@@ -72,6 +72,36 @@ function ojf_skufix_step() {
 
 ojf_job_register('skufix', 'ojf_skufix_pending', 'ojf_skufix_step', 1);
 
+/*
+ * Nomes com "�" que o pipeline não alcança (>= 1.0.87): a página da origem
+ * sumiu (404, o push é recusado) ou uma trava recusa o push. O resto dos 84
+ * foi corrigido relendo o ERP. Aqui o nome certo vem do ERP relido (D1).
+ */
+define('OJF_NAMEFIX_VERSION', 'n1');
+function ojf_namefix_data() {
+    return [
+        775534 => ['SERINGA 20ML C/AG MEDIX', 'MEDIX'],
+        771600 => ['BABADOR PLASTICO ESTAMPADO INFANTIL JON', 'JON'],
+    ];
+}
+function ojf_namefix_pending() {
+    return get_option('ojf_namefix_done') !== OJF_NAMEFIX_VERSION;
+}
+function ojf_namefix_step() {
+    $log = [];
+    foreach (ojf_namefix_data() as $pid => [$nome, $marca]) {
+        $p = wc_get_product((int) $pid);
+        if (!$p) { $log[$pid] = 'não existe'; continue; }
+        if (strpos($p->get_name(), "\u{FFFD}") === false) { $log[$pid] = 'já estava certo'; continue; }
+        ojf_set_product_title($p, ['name' => $nome, 'attributes' => [['name' => 'Marca', 'options' => [$marca]]]]);
+        $p->save();
+        $log[$pid] = $p->get_name();
+    }
+    update_option('ojf_namefix_log', $log, false);
+    update_option('ojf_namefix_done', OJF_NAMEFIX_VERSION, false);
+}
+ojf_job_register('namefix', 'ojf_namefix_pending', 'ojf_namefix_step', 1);
+
 add_action('rest_api_init', function () {
     register_rest_route('odontojf/v1', '/sku-fix-status', [
         'methods' => 'GET', 'permission_callback' => '__return_true',
@@ -79,6 +109,7 @@ add_action('rest_api_init', function () {
             return new WP_REST_Response([
                 'done' => get_option('ojf_skufix_done') ?: null,
                 'log'  => get_option('ojf_skufix_log') ?: null,
+                'names' => get_option('ojf_namefix_log') ?: null,
             ], 200);
         },
     ]);

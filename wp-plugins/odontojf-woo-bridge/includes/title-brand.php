@@ -112,6 +112,9 @@ function ojf_product_brand($product) {
 /** Grava o título de um push do Worker: base no meta, marca no fim. */
 function ojf_set_product_title($product, $data) {
     $base = trim((string) $data['name']);
+    // "�" = texto que alguém decodificou errado no caminho (o ERP manda Latin-1).
+    // Nunca publica isso: mantém o título que o produto já tem.
+    if ($base === '' || strpos($base, "\u{FFFD}") !== false) return;
     $product->update_meta_data('_ojf_title_base', $base);
     $product->set_name(ojf_target_title($base, ojf_payload_brand($data)));
 }
