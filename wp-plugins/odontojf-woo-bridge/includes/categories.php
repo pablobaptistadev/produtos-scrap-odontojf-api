@@ -290,6 +290,20 @@ function ojf_catfix_step() {
                 $n = (int) $wpdb->get_var($wpdb->prepare(
                     "SELECT COUNT(*) FROM {$wpdb->term_relationships} WHERE term_taxonomy_id = %d", (int) $term->term_taxonomy_id
                 ));
+                if ($n > 0 && !empty($d['strip_junk'])) {
+                    // Lixo ainda usado: tira dos produtos (qualquer status) e, se o
+                    // produto ficar sem categoria nenhuma, vai para "Sem categoria"
+                    // — é como ele está na origem (que não o classifica).
+                    $padrao = (int) get_option('default_product_cat');
+                    foreach ((array) get_objects_in_term((int) $term->term_id, 'product_cat') as $obj) {
+                        wp_remove_object_terms((int) $obj, (int) $term->term_id, 'product_cat');
+                        $resto = wp_get_object_terms((int) $obj, 'product_cat', ['fields' => 'ids']);
+                        if (!is_wp_error($resto) && !$resto && $padrao) wp_set_object_terms((int) $obj, [$padrao], 'product_cat');
+                        clean_post_cache((int) $obj);
+                        $st['stripped'] = (int) ($st['stripped'] ?? 0) + 1;
+                    }
+                    $n = 0;
+                }
                 if ($n > 0) { $st['kept_with_products']++; continue; }
                 $menu = $wpdb->get_col($wpdb->prepare(
                     "SELECT m.post_id FROM {$wpdb->postmeta} m
@@ -298,7 +312,10 @@ function ojf_catfix_step() {
                 ));
                 if ($menu) {
                     $alvo = $canon_by_name[ojf_catfix_norm($term->name)] ?? 0;
-                    if (!$alvo) { $st['menu_kept']++; continue; } // menu usa e não há equivalente: fica
+                    // sem equivalente: fica — a não ser que o arquivo mande apagar
+                    // (o WordPress tira o item de menu junto com a categoria)
+                    if (!$alvo && empty($d['delete_menu_terms'])) { $st['menu_kept']++; continue; }
+                    if (!$alvo) { $st['menu_removed'] = (int) ($st['menu_removed'] ?? 0) + count($menu); $menu = []; }
                     foreach ($menu as $mid) update_post_meta((int) $mid, '_menu_item_object_id', (string) $alvo);
                     $st['menu_repointed'] += count($menu);
                 }
