@@ -737,7 +737,12 @@ function ojf_apply_product_fields($product, $data) {
             $product->set_manage_stock(true);
             $product->set_stock_quantity((int) $data['stock_quantity']);
         }
-        if (!empty($data['stock_status'])) $product->set_stock_status((string) $data['stock_status']);
+        if (!empty($data['stock_status']) && in_array($data['stock_status'], ['instock', 'outofstock', 'onbackorder'], true)) {
+            // Só disponibilidade, espelho da origem (>= 1.0.80): sem quantidade o
+            // Woo só respeita o status se não estiver gerenciando estoque.
+            if (!array_key_exists('stock_quantity', $data)) $product->set_manage_stock(false);
+            $product->set_stock_status((string) $data['stock_status']);
+        }
         if (!empty($data['weight'])) $product->set_weight((string) $data['weight']);
     }
 
@@ -920,6 +925,10 @@ function ojf_sync_variations($parent_id, $variations, $absorb_from = 0) {
         if (array_key_exists('stock_quantity', $var) && $var['stock_quantity'] !== null) {
             $variation->set_manage_stock(true);
             $variation->set_stock_quantity((int) $var['stock_quantity']);
+        }
+        if (!empty($var['stock_status']) && in_array($var['stock_status'], ['instock', 'outofstock', 'onbackorder'], true)) {
+            if (!array_key_exists('stock_quantity', $var)) $variation->set_manage_stock(false);
+            $variation->set_stock_status((string) $var['stock_status']);
         }
         // Título e descrição próprios da variação (>= 1.0.36). Na origem cada
         // variação é um produto com página, título e descrição próprios — o

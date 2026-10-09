@@ -132,6 +132,11 @@ export function buildPluginPayload(
         body.stock_status = merged.stock_status;
       }
     }
+    // Availability mirrors the origin even when pricing stays with the store:
+    // out of stock there = out of stock here, which is what drives "Avise-me".
+    if (skipPricing && (merged.stock_status === "instock" || merged.stock_status === "outofstock")) {
+      body.stock_status = merged.stock_status;
+    }
     if (merged.weight != null && merged.weight !== "") body.weight = String(merged.weight);
   }
   if (merged.dimensions && typeof merged.dimensions === "object") body.dimensions = merged.dimensions;
@@ -156,6 +161,9 @@ export function buildPluginPayload(
         } else if (v.stock_status) {
           vb.stock_status = v.stock_status;
         }
+      }
+      if (skipPricing && (v.stock_status === "instock" || v.stock_status === "outofstock")) {
+        vb.stock_status = v.stock_status;
       }
       if (v.weight != null && v.weight !== "") vb.weight = String(v.weight);
       if (v.dimensions && typeof v.dimensions === "object") vb.dimensions = v.dimensions;

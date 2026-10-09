@@ -2,13 +2,24 @@
 /**
  * Plugin Name: OdontoJF Woo Bridge
  * Description: Recebe produtos do Worker OdontoJF numa fila própria (api_queue) com timing/retry, cria/atualiza no WooCommerce com ATRIBUTOS MANUAIS (não globais) e serve imagens via R2 (fila de imagens, WebP, AWS SigV4). Dashboards de tempo de cadastro/update.
- * Version: 1.0.79
+ * Version: 1.0.80
  * Author: OdontoJF
  * Requires PHP: 7.4
  * Requires at least: 6.0
  * WC requires at least: 6.0
  *
  * CHANGELOG (mais recente primeiro):
+ *  1.0.80 - AVISE-ME + ESTOQUE DA ORIGEM. Disponibilidade espelha a origem: o
+ *          push aplica stock_status sem quantidade (manage_stock=false), tambem
+ *          nas variacoes (antes elas nem recebiam status); carga inicial em
+ *          lote (data/stock-sync.json: 664 simples e 1.952 variacoes
+ *          esgotadas). Avise-me: botao com sino no widget de compra (simples
+ *          esgotado, ou a variacao escolhida esgotada) e no grid; popup novo
+ *          (nome, e-mail, WhatsApp com mascara); lista de espera em
+ *          {prefix}ojf_avise_me; quando o item volta ao estoque, e-mail
+ *          "Chegou!" e marca como avisado. WooCommerce > Avise-me: lista, mais
+ *          esperados, CSV e e-mail de teste. Orcamento tem prioridade sobre o
+ *          Avise-me. jobs.php: lotes sem WP-Cron reutilizaveis.
  *  1.0.79 - 301 para 2 links do menu que ja estavam quebrados (Moldagem e Modelo,
  *          Cadeira Odontologica "-consultorio-odontologico-2").
  *  1.0.78 - Categoria Orcamento vai para o 1o nivel (era filha de Cadeira
@@ -343,7 +354,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('OJF_BRIDGE_VERSION', '1.0.79');
+define('OJF_BRIDGE_VERSION', '1.0.80');
 define('OJF_BRIDGE_FILE', __FILE__);
 define('OJF_BRIDGE_DIR', plugin_dir_path(__FILE__));
 
@@ -357,7 +368,10 @@ require_once OJF_BRIDGE_DIR . 'includes/product-log.php';     // log ERP + hist�
 require_once OJF_BRIDGE_DIR . 'includes/image-handler.php';   // fila de imagens + R2 (verbatim)
 require_once OJF_BRIDGE_DIR . 'includes/product-handler.php'; // handlers + rotas (atributo manual, _sku=ERP)
 require_once OJF_BRIDGE_DIR . 'includes/categories.php';      // categorias = as da origem, por slug; nunca cria + limpeza
+require_once OJF_BRIDGE_DIR . 'includes/jobs.php';            // lotes em segundo plano sem WP-Cron (corrente admin-ajax)
 require_once OJF_BRIDGE_DIR . 'includes/budget.php';          // sob orçamento: "Solicitar orçamento" no grid
+require_once OJF_BRIDGE_DIR . 'includes/avise-me.php';        // Avise-me: botão sem estoque, lista de espera, e-mail
+require_once OJF_BRIDGE_DIR . 'includes/stock-sync.php';      // disponibilidade = a da origem (carga inicial)
 require_once OJF_BRIDGE_DIR . 'includes/title-brand.php';     // "Nome - MARCA" no título (push + lote dos existentes)
 require_once OJF_BRIDGE_DIR . 'includes/cart-erp.php';        // preço/estoque ao vivo no carrinho
 require_once OJF_BRIDGE_DIR . 'includes/video.php';          // shortcode [ojf_video] (vídeo via custom field)

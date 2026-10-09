@@ -60,7 +60,7 @@ describe("buildPluginPayload — faithful variations", () => {
     expect(v).not.toHaveProperty("images");
   });
 
-  it("skipPricing leaves every price and stock key out", () => {
+  it("skipPricing leaves price and quantity out, but mirrors the origin's availability", () => {
     const body = buildPluginPayload(forceps as any, "3184", { skipPricing: true });
     const v = body.variations[0];
 
@@ -69,9 +69,15 @@ describe("buildPluginPayload — faithful variations", () => {
     expect(v).not.toHaveProperty("regular_price");
     expect(v).not.toHaveProperty("sale_price");
     expect(v).not.toHaveProperty("stock_quantity");
-    expect(v).not.toHaveProperty("stock_status");
     expect(body).not.toHaveProperty("regular_price");
     expect(body).not.toHaveProperty("stock_quantity");
+    // A disponibilidade segue a origem (esgotado lá = esgotado aqui → Avise-me).
+    const forcepsVar = (forceps as any).variations[0];
+    if (forcepsVar.stock_status === "instock" || forcepsVar.stock_status === "outofstock") {
+      expect(v.stock_status).toBe(forcepsVar.stock_status);
+    } else {
+      expect(v).not.toHaveProperty("stock_status");
+    }
 
     // e o conteúdo continua indo
     expect(v.name).toBe("Fórceps Adulto N°150");
@@ -85,6 +91,19 @@ describe("buildPluginPayload — faithful variations", () => {
     expect(body).not.toHaveProperty("regular_price");
     expect(body).not.toHaveProperty("stock_quantity");
     expect(body.name).toBe("Y");
+  });
+
+  it("skipPricing: produto esgotado na origem vai esgotado; sem informação não manda nada", () => {
+    const esgotado = buildPluginPayload({ type: "simple", name: "Y", stock_status: "outofstock", stock_quantity: 0 } as any, "1", { skipPricing: true });
+    expect(esgotado.stock_status).toBe("outofstock");
+    expect(esgotado).not.toHaveProperty("stock_quantity");
+    const semInfo = buildPluginPayload({ type: "simple", name: "Y", stock_status: null } as any, "2", { skipPricing: true });
+    expect(semInfo).not.toHaveProperty("stock_status");
+    const variavel = buildPluginPayload({
+      type: "variable", name: "V",
+      variations: [{ sku: "A", stock_status: "outofstock" }, { sku: "B", stock_status: "instock" }, { sku: "C" }],
+    } as any, "3", { skipPricing: true });
+    expect(variavel.variations.map((x: any) => x.stock_status ?? null)).toEqual(["outofstock", "instock", null]);
   });
 
   it("does not prefix a parent SKU that is already prefixed", () => {
