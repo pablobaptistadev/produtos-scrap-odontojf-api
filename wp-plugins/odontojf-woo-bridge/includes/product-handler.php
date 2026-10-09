@@ -942,9 +942,12 @@ function ojf_sync_variations($parent_id, $variations, $absorb_from = 0) {
 
         // 2) o código está preso em algo vivo de outro produto → sufixa em vez de
         //    roubar. O código real continua em _ojf_erp_code (é o que o carrinho usa).
-        if (!$existing_id && ojf_sku_taken_by_other($vsku, $parent_id, $absorb_from)) {
+        //    Vale também quando a variação já é nossa (>= 1.0.86): ela tem o sufixo
+        //    justamente porque o código é do outro, e voltar ao código puro fazia o
+        //    push inteiro falhar com "SKU inválido ou duplicado" (39 produtos).
+        if (ojf_sku_taken_by_other($vsku, $parent_id, $absorb_from)) {
             $vsku = $erp_code . '-p' . (int) $parent_id;
-            $existing_id = ojf_find_own_variation($parent_id, $erp_code, $vsku);
+            if (!$existing_id) $existing_id = ojf_find_own_variation($parent_id, $erp_code, $vsku);
         }
 
         // 3) senão, reusa a variação solta que já carrega esse _sku.
